@@ -9,6 +9,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$payloadOut = Join-Path $repoRoot "dist\acb-win-x64"
 
 function Resolve-Iscc {
   $cmd = Get-Command iscc -ErrorAction SilentlyContinue
@@ -30,6 +31,7 @@ $packageArgs = @(
   "-ExecutionPolicy", "Bypass",
   "-File", (Join-Path $PSScriptRoot "package.ps1"),
   "-Version", $Version,
+  "-OutDir", $payloadOut,
   "-RequireRealObsPlugin", $RequireRealObsPlugin
 )
 if ($ObsIncludeDir) {
@@ -42,6 +44,26 @@ if ($ObsLibDir) {
   $packageArgs += @("-ObsLibDir", $ObsLibDir)
 }
 pwsh @packageArgs
+if ($LASTEXITCODE -ne 0) {
+  throw "Package step failed."
+}
+
+$required = @(
+  (Join-Path $payloadOut "receiver\acb-receiver.exe"),
+  (Join-Path $payloadOut "gui"),
+  (Join-Path $payloadOut "prereqs\vc_redist.x64.exe")
+)
+foreach ($item in $required) {
+  if (-not (Test-Path $item)) {
+    Write-Host "Payload directory snapshot:"
+    if (Test-Path $payloadOut) {
+      Get-ChildItem $payloadOut -Recurse | Select-Object -First 120 FullName | ForEach-Object { Write-Host "  $($_.FullName)" }
+    } else {
+      Write-Host "  <missing> $payloadOut"
+    }
+    throw "Required payload item missing: $item"
+  }
+}
 
 $iscc = Resolve-Iscc
 if (-not $iscc) {
