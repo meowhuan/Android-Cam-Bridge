@@ -1,4 +1,10 @@
 #Requires -Version 7.0
+param(
+    [string]$ObsIncludeDir = "",
+    [string]$ObsGeneratedIncludeDir = "",
+    [string]$ObsLibDir = ""
+)
+
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -20,7 +26,17 @@ function Reset-BuildDirIfSourceChanged {
 
 Reset-BuildDirIfSourceChanged -Dir $buildDir -ExpectedSource $repoRoot
 
-cmake -S $repoRoot -B $buildDir -G "Visual Studio 17 2022" -A x64
+$cmakeArgs = @("-S", $repoRoot, "-B", $buildDir, "-G", "Visual Studio 17 2022", "-A", "x64")
+if ($ObsIncludeDir) {
+  $cmakeArgs += "-DOBS_INCLUDE_DIR=$ObsIncludeDir"
+}
+if ($ObsGeneratedIncludeDir) {
+  $cmakeArgs += "-DOBS_GENERATED_INCLUDE_DIR=$ObsGeneratedIncludeDir"
+}
+if ($ObsLibDir) {
+  $cmakeArgs += "-DOBS_LIB_DIR=$ObsLibDir"
+}
+cmake @cmakeArgs
 cmake --build $buildDir --config Release --target acb-receiver
 if ($LASTEXITCODE -ne 0) {
     throw "Receiver build failed."

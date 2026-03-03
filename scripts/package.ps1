@@ -48,7 +48,7 @@ cmake @cmakeArgs
 cmake --build $buildDir --config Release --target acb-receiver
 cmake --build $buildDir --config Release --target acb-obs-plugin
 
-pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "publish-gui.ps1")
+pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "publish-gui.ps1") -ObsIncludeDir $ObsIncludeDir -ObsGeneratedIncludeDir $ObsGeneratedIncludeDir -ObsLibDir $ObsLibDir
 if ($LASTEXITCODE -ne 0) {
   throw "GUI publish failed in package step."
 }
@@ -123,3 +123,4 @@ $meta = [ordered]@{
 $meta | ConvertTo-Json -Depth 3 | Set-Content -Path (Join-Path $outRoot "package.json") -Encoding UTF8
 
 Write-Host "Package ready: $outRoot"
+
