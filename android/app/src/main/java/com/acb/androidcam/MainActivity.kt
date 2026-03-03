@@ -31,6 +31,10 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        isLandscapeLocked = savedInstanceState?.getBoolean(KEY_LANDSCAPE_LOCKED)
+            ?: getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_LANDSCAPE_LOCKED, false)
+        applyOrientationLock()
+
         val previewView = findViewById<PreviewView>(R.id.previewView)
         controller = CameraController(this, this, previewView)
 
@@ -61,11 +65,8 @@ class MainActivity : AppCompatActivity() {
 
         orientationButton.setOnClickListener {
             isLandscapeLocked = !isLandscapeLocked
-            requestedOrientation = if (isLandscapeLocked) {
-                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            } else {
-                ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-            }
+            persistOrientationLock()
+            applyOrientationLock()
             updateOrientationButtonText(orientationButton)
         }
 
@@ -101,6 +102,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean(KEY_LANDSCAPE_LOCKED, isLandscapeLocked)
+        super.onSaveInstanceState(outState)
+    }
+
+    private fun applyOrientationLock() {
+        requestedOrientation = if (isLandscapeLocked) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    private fun persistOrientationLock() {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_LANDSCAPE_LOCKED, isLandscapeLocked)
+            .apply()
+    }
+
     private fun updateOrientationButtonText(button: Button) {
         button.text = if (isLandscapeLocked) {
             getString(R.string.btn_orientation_landscape_on)
@@ -116,5 +137,10 @@ class MainActivity : AppCompatActivity() {
         if (needCamera || needAudio) {
             permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
         }
+    }
+
+    companion object {
+        private const val PREFS_NAME = "acb_main"
+        private const val KEY_LANDSCAPE_LOCKED = "landscape_locked"
     }
 }
