@@ -95,9 +95,25 @@ jobs:
             "$hash  $($_.Name)" | Out-File -FilePath "dist/release-assets/SHA256SUMS.txt" -Encoding utf8 -Append
           }
 
+      - name: Check GPG secrets
+        id: gpg_check
+        shell: pwsh
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          $enabled = -not [string]::IsNullOrWhiteSpace($env:GPG_PRIVATE_KEY) -and -not [string]::IsNullOrWhiteSpace($env:GPG_PASSPHRASE)
+          if ($enabled) {
+            "enabled=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            Write-Host "GPG signing enabled."
+          } else {
+            "enabled=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            Write-Host "GPG signing skipped: missing secrets."
+          }
+
       - name: Import GPG private key
         id: gpg
-        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        if: steps.gpg_check.outputs.enabled == 'true'
         shell: pwsh
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -112,7 +128,7 @@ jobs:
           Write-Host "Imported GPG key fingerprint: $fpr"
 
       - name: Sign release assets with GPG
-        if: ${{ steps.gpg.outputs.fingerprint != '' }}
+        if: steps.gpg.outputs.fingerprint != ''
         shell: pwsh
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
