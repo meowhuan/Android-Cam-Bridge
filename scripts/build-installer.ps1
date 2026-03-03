@@ -1,6 +1,10 @@
 #Requires -Version 7.0
 param(
-  [string]$Version = "0.2.4"
+  [string]$Version = "0.2.4",
+  [string]$ObsIncludeDir = "",
+  [string]$ObsGeneratedIncludeDir = "",
+  [string]$ObsLibDir = "",
+  [bool]$RequireRealObsPlugin = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,7 +25,23 @@ function Resolve-Iscc {
 }
 
 Write-Host "Step 1/2: Build package payload"
-pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "package.ps1") -Version $Version
+$packageArgs = @(
+  "-NoProfile",
+  "-ExecutionPolicy", "Bypass",
+  "-File", (Join-Path $PSScriptRoot "package.ps1"),
+  "-Version", $Version,
+  "-RequireRealObsPlugin", $RequireRealObsPlugin
+)
+if ($ObsIncludeDir) {
+  $packageArgs += @("-ObsIncludeDir", $ObsIncludeDir)
+}
+if ($ObsGeneratedIncludeDir) {
+  $packageArgs += @("-ObsGeneratedIncludeDir", $ObsGeneratedIncludeDir)
+}
+if ($ObsLibDir) {
+  $packageArgs += @("-ObsLibDir", $ObsLibDir)
+}
+pwsh @packageArgs
 
 $iscc = Resolve-Iscc
 if (-not $iscc) {

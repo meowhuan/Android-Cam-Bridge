@@ -16,6 +16,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Checkout OBS Studio source
+        uses: actions/checkout@v4
+        with:
+          repository: obsproject/obs-studio
+          ref: 32.0.4
+          path: .tmp-obs-studio
+          fetch-depth: 1
+
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -32,18 +40,44 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
+      - name: Build OBS SDK (libobs)
+        shell: pwsh
+        run: |
+          cmake -S .tmp-obs-studio -B build-obs-sdk -G "Visual Studio 17 2022" -A x64 -DENABLE_UI=OFF -DENABLE_SCRIPTING=OFF -DENABLE_HEVC=OFF
+          cmake --build build-obs-sdk --config Release --target obs
+
+          $obsInclude = (Resolve-Path ".tmp-obs-studio/libobs").Path
+          $obsGenerated = (Resolve-Path "build-obs-sdk/config").Path
+          $obsLibDir = (Resolve-Path "build-obs-sdk/libobs/Release").Path
+
+          if (-not (Test-Path (Join-Path $obsLibDir "obs.lib"))) {
+            throw "obs.lib not found under $obsLibDir"
+          }
+
+          "OBS_INCLUDE_DIR=$obsInclude" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "OBS_GENERATED_INCLUDE_DIR=$obsGenerated" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "OBS_LIB_DIR=$obsLibDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Build native targets
         shell: pwsh
-        run: ./scripts/build.ps1 -Config Release
+        run: ./scripts/build.ps1 -Config Release -ObsIncludeDir "$env:OBS_INCLUDE_DIR" -ObsGeneratedIncludeDir "$env:OBS_GENERATED_INCLUDE_DIR" -ObsLibDir "$env:OBS_LIB_DIR"
 
       - name: Build Android debug APK
         shell: pwsh
         working-directory: ./android
         run: gradle :app:assembleDebug --no-daemon
 
-      - name: Package payload
+      - name: Package payload (require real OBS plugin)
         shell: pwsh
-        run: ./scripts/package.ps1 -Version "0.0.0-ci" -OutDir "./dist/acb-win-x64"
+        run: ./scripts/package.ps1 -Version "0.0.0-ci" -OutDir "./dist/acb-win-x64" -ObsIncludeDir "$env:OBS_INCLUDE_DIR" -ObsGeneratedIncludeDir "$env:OBS_GENERATED_INCLUDE_DIR" -ObsLibDir "$env:OBS_LIB_DIR" -RequireRealObsPlugin $true
+
+      - name: Verify OBS plugin mode
+        shell: pwsh
+        run: |
+          $pkg = Get-Content "dist/acb-win-x64/package.json" -Raw | ConvertFrom-Json
+          if ($pkg.obsPluginBuildMode -ne "real") {
+            throw "OBS plugin mode is '$($pkg.obsPluginBuildMode)' not 'real'."
+          }
 
       - name: Upload Windows payload
         uses: actions/upload-artifact@v4

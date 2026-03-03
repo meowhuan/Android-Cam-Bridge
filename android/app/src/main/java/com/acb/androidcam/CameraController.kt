@@ -9,6 +9,9 @@ import android.graphics.YuvImage
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.util.Log
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -152,6 +155,56 @@ class CameraController(
         Log.i("ACB", "stop stream")
     }
 
+    private data class AudioFxBundle(
+        val ns: NoiseSuppressor?,
+        val agc: AutomaticGainControl?,
+        val aec: AcousticEchoCanceler?,
+    ) {
+        fun releaseAll() {
+            try {
+                ns?.release()
+            } catch (_: Throwable) {
+            }
+            try {
+                agc?.release()
+            } catch (_: Throwable) {
+            }
+            try {
+                aec?.release()
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private fun tryEnableAudioFx(sessionId: Int): AudioFxBundle {
+        var ns: NoiseSuppressor? = null
+        var agc: AutomaticGainControl? = null
+        var aec: AcousticEchoCanceler? = null
+
+        try {
+            if (NoiseSuppressor.isAvailable()) {
+                ns = NoiseSuppressor.create(sessionId)
+                ns?.enabled = true
+            }
+            if (AutomaticGainControl.isAvailable()) {
+                agc = AutomaticGainControl.create(sessionId)
+                agc?.enabled = true
+            }
+            if (AcousticEchoCanceler.isAvailable()) {
+                aec = AcousticEchoCanceler.create(sessionId)
+                aec?.enabled = true
+            }
+        } catch (t: Throwable) {
+            Log.w("ACB", "audio fx setup failed: ${t.message}")
+        }
+
+        Log.i(
+            "ACB",
+            "audio fx ns=${ns?.enabled == true} agc=${agc?.enabled == true} aec=${aec?.enabled == true}",
+        )
+        return AudioFxBundle(ns, agc, aec)
+    }
+
     private fun startMicStream() {
         if (micRunning.get()) return
         micRunning.set(true)
@@ -179,14 +232,16 @@ class CameraController(
             }
 
             val recorder = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                 sampleRate,
                 channelConfig,
                 encoding,
                 minBuffer * 2,
             )
 
+            var audioFx: AudioFxBundle? = null
             try {
+                audioFx = tryEnableAudioFx(recorder.audioSessionId)
                 recorder.startRecording()
                 val buffer = ByteArray(minBuffer)
 
@@ -207,6 +262,7 @@ class CameraController(
                 } catch (_: Throwable) {
                 }
                 recorder.release()
+                audioFx?.releaseAll()
                 micRunning.set(false)
             }
         }
