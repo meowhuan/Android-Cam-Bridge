@@ -3,8 +3,8 @@ param(
   [ValidateSet("payload", "installer")]
   [string]$Mode = "installer",
   [string]$Version = "0.2.4-local",
-  [string]$ObsRepoRoot = "F:\obs-studio",
-  [string]$ObsBuildRoot = "F:\obs-studio\build_x64_local",
+  [string]$ObsRepoRoot = "F:\obs-studio-32.0.4",
+  [string]$ObsBuildRoot = "F:\obs-studio-32.0.4\build_x64_local",
   [switch]$AllowStubPlugin
 )
 
@@ -61,3 +61,4 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "build-in
 if ($LASTEXITCODE -ne 0) { throw "Local installer build failed." }
 
 Write-Host "Done. Installer output: $repoRoot\dist\installer"
+

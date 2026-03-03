@@ -37,6 +37,11 @@ Receiver default address: `http://127.0.0.1:39393`
 
 More details: [`protocol/v2/README.md`](protocol/v2/README.md).
 
+### OBS Plugin Compatibility
+- `acb-obs-plugin` is built against **OBS SDK/libobs 32.0.4** by default.
+- If your OBS runtime is newer or older (for example 32.1+), OBS may reject loading the plugin due to ABI mismatch (`compiled with newer libobs`).
+- Recommendation: keep plugin build SDK and installed OBS on the same minor version.
+
 ### Build
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
@@ -102,6 +107,11 @@ Receiver 默认地址：`http://127.0.0.1:39393`
 
 详细说明见：[`protocol/v2/README.md`](protocol/v2/README.md)。
 
+### OBS 插件兼容性
+- `acb-obs-plugin` 默认按 **OBS SDK/libobs 32.0.4** 编译。
+- 如果本机 OBS 版本高于或低于该小版本（例如 32.1+），可能因 ABI 不匹配被拒绝加载（`compiled with newer libobs`）。
+- 建议：插件编译所用 SDK 与已安装 OBS 保持同一小版本。
+
 ### 构建
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
@@ -120,3 +130,4 @@ gradle :app:assembleDebug
 4. 使用 `installer/` 脚本生成安装包。
 5. 验证卸载流程（无残留进程/服务）。
 6. GitHub 发布使用自动化流程，见 [`docs/RELEASE.md`](docs/RELEASE.md)。
+

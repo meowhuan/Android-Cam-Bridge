@@ -32,7 +32,7 @@ $packageArgs = @(
   "-File", (Join-Path $PSScriptRoot "package.ps1"),
   "-Version", $Version,
   "-OutDir", $payloadOut,
-  "-RequireRealObsPlugin", $RequireRealObsPlugin
+  "-RequireRealObsPlugin:$RequireRealObsPlugin"
 )
 if ($ObsIncludeDir) {
   $packageArgs += @("-ObsIncludeDir", $ObsIncludeDir)
@@ -78,3 +78,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Installer created under: $repoRoot\dist\installer"
+
