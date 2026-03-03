@@ -67,36 +67,23 @@ jobs:
         shell: pwsh
         run: choco install innosetup --no-progress -y
 
-      - name: Build OBS SDK (libobs)
+      - name: Build OBS SDK (official script)
         shell: pwsh
         run: |
-          cmake -S .tmp-obs-studio -B build-obs-sdk -G "Visual Studio 17 2022" -A x64 -DENABLE_UI=OFF -DENABLE_SCRIPTING=OFF -DENABLE_HEVC=OFF
-
-          cmake --build build-obs-sdk --config Release --target libobs
-          if ($LASTEXITCODE -ne 0) {
-            cmake --build build-obs-sdk --config Release --target obs
-            if ($LASTEXITCODE -ne 0) {
-              throw "Failed to build OBS SDK targets (libobs/obs)."
-            }
-          }
+          $env:CI = "true"
+          pwsh -NoProfile -ExecutionPolicy Bypass -File .tmp-obs-studio/.github/scripts/Build-Windows.ps1 -Target x64 -Configuration Release
 
           $obsInclude = (Resolve-Path ".tmp-obs-studio/libobs").Path
-          $obsConfigHeader = Get-ChildItem "build-obs-sdk" -Recurse -Filter "obsconfig.h" | Select-Object -First 1
-          $obsLib = Get-ChildItem "build-obs-sdk" -Recurse -File | Where-Object {
-            $_.Name -in @("obs.lib", "libobs.lib") -and $_.FullName -notmatch "\\CMakeFiles\\"
+          $obsConfigHeader = Get-ChildItem ".tmp-obs-studio/build_x64" -Recurse -Filter "obsconfig.h" | Select-Object -First 1
+          $obsLib = Get-ChildItem ".tmp-obs-studio/build_x64" -Recurse -File | Where-Object {
+            $_.Name -eq "obs.lib" -and $_.FullName -notmatch "\\CMakeFiles\\"
           } | Select-Object -First 1
 
-          if (-not $obsConfigHeader) { throw "obsconfig.h not found under build-obs-sdk" }
+          if (-not $obsConfigHeader) { throw "obsconfig.h not found under .tmp-obs-studio/build_x64" }
           if (-not $obsLib) {
-            Write-Host "Available .lib files under build-obs-sdk:"
-            Get-ChildItem "build-obs-sdk" -Recurse -Filter "*.lib" | Select-Object -First 100 -ExpandProperty FullName | ForEach-Object { Write-Host "  $_" }
-            throw "Neither obs.lib nor libobs.lib found under build-obs-sdk"
-          }
-
-          if ($obsLib.Name -eq "libobs.lib") {
-            $obsAlias = Join-Path $obsLib.Directory.FullName "obs.lib"
-            Copy-Item $obsLib.FullName $obsAlias -Force
-            $obsLib = Get-Item $obsAlias
+            Write-Host "Available .lib files under .tmp-obs-studio/build_x64:"
+            Get-ChildItem ".tmp-obs-studio/build_x64" -Recurse -Filter "*.lib" | Select-Object -First 100 -ExpandProperty FullName | ForEach-Object { Write-Host "  $_" }
+            throw "obs.lib not found under .tmp-obs-studio/build_x64"
           }
 
           $obsGenerated = $obsConfigHeader.Directory.FullName
@@ -210,3 +197,4 @@ jobs:
             dist/release-assets/ACB-Android-${{ steps.version.outputs.value }}.apk
             dist/release-assets/SHA256SUMS.txt
             dist/release-assets/*.asc
+
