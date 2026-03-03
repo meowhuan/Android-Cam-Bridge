@@ -101,6 +101,24 @@ jobs:
             throw "OBS plugin mode is '$($pkg.obsPluginBuildMode)' not 'real'."
           }
 
+
+      - name: Validate payload files
+        shell: pwsh
+        run: |
+          $required = @(
+            "dist/acb-win-x64/package.json",
+            "dist/acb-win-x64/receiver/acb-receiver.exe",
+            "dist/acb-win-x64/prereqs/vc_redist.x64.exe"
+          )
+          foreach ($item in $required) {
+            if (-not (Test-Path $item)) {
+              Write-Host "Missing payload item: $item"
+              if (Test-Path "dist/acb-win-x64") {
+                Get-ChildItem "dist/acb-win-x64" -Recurse | Select-Object -First 200 FullName | ForEach-Object { Write-Host "  $($_.FullName)" }
+              }
+              throw "Payload validation failed."
+            }
+          }
       - name: Upload Windows payload
         uses: actions/upload-artifact@v4
         with:
@@ -114,6 +132,7 @@ jobs:
           name: acb-android-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
 
 
 

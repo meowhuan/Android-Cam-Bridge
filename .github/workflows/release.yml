@@ -120,6 +120,26 @@ jobs:
         shell: pwsh
         run: ./scripts/build-installer.ps1 -Version "${{ steps.version.outputs.value }}" -ObsIncludeDir "$env:OBS_INCLUDE_DIR" -ObsGeneratedIncludeDir "$env:OBS_GENERATED_INCLUDE_DIR" -ObsLibDir "$env:OBS_LIB_DIR" -RequireRealObsPlugin $true
 
+
+      - name: Validate release payload
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.value }}"
+          $required = @(
+            "dist/acb-win-x64/package.json",
+            "dist/acb-win-x64/receiver/acb-receiver.exe",
+            "dist/acb-win-x64/prereqs/vc_redist.x64.exe",
+            "dist/installer/ACB-Setup-$version.exe"
+          )
+          foreach ($item in $required) {
+            if (-not (Test-Path $item)) {
+              Write-Host "Missing release item: $item"
+              if (Test-Path "dist") {
+                Get-ChildItem "dist" -Recurse | Select-Object -First 300 FullName | ForEach-Object { Write-Host "  $($_.FullName)" }
+              }
+              throw "Release payload validation failed."
+            }
+          }
       - name: Collect release assets
         shell: pwsh
         run: |
@@ -207,6 +227,7 @@ jobs:
             dist/release-assets/ACB-Android-${{ steps.version.outputs.value }}.apk
             dist/release-assets/SHA256SUMS.txt
             dist/release-assets/*.asc
+
 
 
 
