@@ -33,7 +33,11 @@ jobs:
           path: .tmp-obs-studio
           fetch-depth: 0
           submodules: recursive
-
+      - name: Cache OBS SDK build
+        uses: actions/cache@v4
+        with:
+          path: .tmp-obs-studio/build_x64
+          key: ${{ runner.os }}-obs-sdk-32.0.4-x64-v1
       - name: Resolve version
         id: version
         shell: pwsh
@@ -71,8 +75,13 @@ jobs:
       - name: Build OBS SDK (official script)
         shell: pwsh
         run: |
-          $env:CI = "true"
-          pwsh -NoProfile -ExecutionPolicy Bypass -File .tmp-obs-studio/.github/scripts/Build-Windows.ps1 -Target x64 -Configuration Release
+          $obsLibCached = Get-ChildItem ".tmp-obs-studio/build_x64" -Recurse -File -Filter "obs.lib" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $obsLibCached) {
+            $env:CI = "true"
+            pwsh -NoProfile -ExecutionPolicy Bypass -File .tmp-obs-studio/.github/scripts/Build-Windows.ps1 -Target x64 -Configuration Release
+          } else {
+            Write-Host "Using cached OBS SDK: $($obsLibCached.FullName)"
+          }
 
           $obsInclude = (Resolve-Path ".tmp-obs-studio/libobs").Path
           $obsConfigHeader = Get-ChildItem ".tmp-obs-studio/build_x64" -Recurse -Filter "obsconfig.h" | Select-Object -First 1
@@ -198,6 +207,9 @@ jobs:
             dist/release-assets/ACB-Android-${{ steps.version.outputs.value }}.apk
             dist/release-assets/SHA256SUMS.txt
             dist/release-assets/*.asc
+
+
+
 
 
 

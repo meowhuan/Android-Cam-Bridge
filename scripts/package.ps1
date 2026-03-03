@@ -30,6 +30,16 @@ function Reset-BuildDirIfSourceChanged {
   }
 }
 
+function Find-BuildFile {
+  param(
+    [string]$Root,
+    [string]$Name
+  )
+  return Get-ChildItem $Root -Recurse -File -Filter $Name |
+    Where-Object { $_.FullName -notmatch "\\CMakeFiles\\" } |
+    Select-Object -First 1
+}
+
 Write-Host "Packaging ACB version $Version"
 
 Reset-BuildDirIfSourceChanged -Dir $buildDir -ExpectedSource $repoRoot
@@ -53,8 +63,15 @@ if ($LASTEXITCODE -ne 0) {
   throw "GUI publish failed in package step."
 }
 
-$receiverSrc = Join-Path $repoRoot "build\windows\receiver\Release\acb-receiver.exe"
-$obsDllSrc = Join-Path $repoRoot "build\windows\obs-plugin\Release\acb-obs-plugin.dll"
+$receiverFile = Find-BuildFile -Root $buildDir -Name "acb-receiver.exe"
+if (-not $receiverFile) {
+  throw "acb-receiver.exe not found under build directory: $buildDir"
+}
+$receiverSrc = $receiverFile.FullName
+
+$obsDllFile = Find-BuildFile -Root $buildDir -Name "acb-obs-plugin.dll"
+$obsDllSrc = if ($obsDllFile) { $obsDllFile.FullName } else { "" }
+
 $obsEnSrc = Join-Path $repoRoot "windows\obs-plugin\data\locale\en-US.ini"
 $obsZhSrc = Join-Path $repoRoot "windows\obs-plugin\data\locale\zh-CN.ini"
 $obsBuildModeFile = Join-Path $repoRoot "build\windows\obs-plugin\acb_obs_build_mode.txt"
@@ -74,6 +91,12 @@ if (-not $hasRealObsPlugin) {
   if ($RequireRealObsPlugin) {
     throw "RequireRealObsPlugin=true but build mode is '$obsBuildMode'."
   }
+}
+
+if ($hasRealObsPlugin -and [string]::IsNullOrWhiteSpace($obsDllSrc)) {
+  Write-Host "Available DLL files under build directory:"
+  Get-ChildItem $buildDir -Recurse -Filter "*.dll" | Select-Object -First 100 -ExpandProperty FullName | ForEach-Object { Write-Host "  $_" }
+  throw "OBS plugin build mode is real but acb-obs-plugin.dll was not found under $buildDir"
 }
 
 $receiverOut = Join-Path $outRoot "receiver"
@@ -123,4 +146,3 @@ $meta = [ordered]@{
 $meta | ConvertTo-Json -Depth 3 | Set-Content -Path (Join-Path $outRoot "package.json") -Encoding UTF8
 
 Write-Host "Package ready: $outRoot"
-
