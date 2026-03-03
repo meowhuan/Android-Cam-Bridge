@@ -1,0 +1,54 @@
+.tmp-winui/
+
+# Build outputs
+build/
+dist/
+out/
+cmake-build-*/
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.exe
+*.pdb
+*.ilk
+
+# CMake / Ninja
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+Testing/
+install_manifest.txt
+.ninja_deps
+.ninja_log
+rules.ninja
+
+# Android / Gradle
+.gradle/
+**/build/
+android/.idea/
+android/local.properties
+*.apk
+*.aab
+
+# .NET / WinUI
+**/bin/
+**/obj/
+*.user
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+
+# IDE
+.idea/
+.vscode/
+
+# Logs / temp
+*.log
+*.tmp
+*.cache
+*.bak
+*.backup

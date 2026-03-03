@@ -1,0 +1,145 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.2.4). For tag trigger, this is ignored."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $v = "${{ github.ref_name }}".TrimStart("v")
+          } elseif ("${{ github.event.inputs.version }}") {
+            $v = "${{ github.event.inputs.version }}"
+          } else {
+            throw "No version provided. Use workflow input 'version' when triggering manually."
+          }
+          "value=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Release version: $v"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build native targets
+        shell: pwsh
+        run: ./scripts/build.ps1 -Config Release
+
+      - name: Build Android release APK
+        shell: pwsh
+        working-directory: ./android
+        run: gradle :app:assembleRelease --no-daemon
+
+      - name: Build installer
+        shell: pwsh
+        run: ./scripts/build-installer.ps1 -Version "${{ steps.version.outputs.value }}"
+
+      - name: Collect release assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist/release-assets -Force | Out-Null
+          $version = "${{ steps.version.outputs.value }}"
+          $zipPath = "dist/release-assets/ACB-win-x64-$version.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Compress-Archive -Path "dist/acb-win-x64/*" -DestinationPath $zipPath -CompressionLevel Optimal
+
+          Copy-Item "dist/installer/ACB-Setup-$version.exe" "dist/release-assets/ACB-Setup-$version.exe" -Force
+
+          $apkCandidates = Get-ChildItem -Path "android/app/build/outputs/apk/release" -Filter "*.apk" -ErrorAction Stop
+          $apk = $apkCandidates | Select-Object -First 1
+          Copy-Item $apk.FullName "dist/release-assets/ACB-Android-$version.apk" -Force
+
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem "dist/release-assets" -File | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)" | Out-File -FilePath "dist/release-assets/SHA256SUMS.txt" -Encoding utf8 -Append
+          }
+
+      - name: Import GPG private key
+        id: gpg
+        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        shell: pwsh
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          $keyFile = Join-Path $env:RUNNER_TEMP "acb-signing.key.asc"
+          Set-Content -Path $keyFile -Value $env:GPG_PRIVATE_KEY -Encoding utf8
+          gpg --batch --import $keyFile
+
+          $fpr = (gpg --batch --list-secret-keys --with-colons | Select-String '^fpr:' | Select-Object -First 1).ToString().Split(':')[9]
+          if (-not $fpr) { throw "No GPG secret key fingerprint found after import." }
+          "fingerprint=$fpr" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Imported GPG key fingerprint: $fpr"
+
+      - name: Sign release assets with GPG
+        if: ${{ steps.gpg.outputs.fingerprint != '' }}
+        shell: pwsh
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_FPR: ${{ steps.gpg.outputs.fingerprint }}
+        run: |
+          Get-ChildItem "dist/release-assets" -File | ForEach-Object {
+            $asc = "$($_.FullName).asc"
+            if (Test-Path $asc) { Remove-Item $asc -Force }
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$env:GPG_PASSPHRASE" --local-user "$env:GPG_FPR" --armor --detach-sign "$($_.FullName)"
+          }
+
+      - name: Upload release artifacts (workflow)
+        uses: actions/upload-artifact@v4
+        with:
+          name: acb-release-${{ steps.version.outputs.value }}
+          path: dist/release-assets/**
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.value }}
+          name: ACB v${{ steps.version.outputs.value }}
+          generate_release_notes: true
+          files: |
+            dist/release-assets/ACB-Setup-${{ steps.version.outputs.value }}.exe
+            dist/release-assets/ACB-win-x64-${{ steps.version.outputs.value }}.zip
+            dist/release-assets/ACB-Android-${{ steps.version.outputs.value }}.apk
+            dist/release-assets/SHA256SUMS.txt
+            dist/release-assets/*.asc

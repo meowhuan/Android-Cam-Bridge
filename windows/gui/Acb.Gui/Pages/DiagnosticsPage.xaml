@@ -1,0 +1,13 @@
+<Page
+    x:Class="Acb.Gui.Pages.DiagnosticsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Padding="24">
+        <StackPanel Spacing="12" Width="520">
+            <TextBlock Text="Diagnostics" FontSize="24" FontWeight="SemiBold" />
+            <TextBox x:Name="SessionIdBox" PlaceholderText="session id" />
+            <Button Content="Fetch v2 Stats" Click="OnFetchStats" Width="150" />
+            <TextBox x:Name="StatsOutput" AcceptsReturn="True" Height="260" IsReadOnly="True" TextWrapping="Wrap" />
+        </StackPanel>
+    </Grid>
+</Page>

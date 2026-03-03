@@ -1,0 +1,16 @@
+<Page
+    x:Class="Acb.Gui.Pages.StreamPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Padding="24">
+        <StackPanel Spacing="12" Width="420">
+            <TextBlock Text="Stream" FontSize="24" FontWeight="SemiBold" />
+            <ComboBox x:Name="TransportBox" SelectedIndex="0">
+                <ComboBoxItem Content="usb-adb" />
+                <ComboBoxItem Content="lan" />
+            </ComboBox>
+            <Button Content="Start v2 Session" Click="OnStartSession" />
+            <TextBox x:Name="SessionOutput" AcceptsReturn="True" Height="240" TextWrapping="Wrap" IsReadOnly="True" />
+        </StackPanel>
+    </Grid>
+</Page>

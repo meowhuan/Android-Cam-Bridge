@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Android Cam Bridge</string>
+    <string name="status_idle">Idle</string>
+    <string name="status_stopped">Stopped</string>
+    <string name="status_streaming">Streaming %1$s -> %2$s</string>
+    <string name="hint_receiver_addr">Receiver IP:Port (USB: 127.0.0.1:39393)</string>
+    <string name="label_push_mic">Push microphone audio</string>
+    <string name="label_lock_landscape">Lock landscape orientation</string>
+    <string name="btn_orientation_landscape_off">Landscape: Off</string>
+    <string name="btn_orientation_landscape_on">Landscape: On</string>
+    <string name="btn_start_stream">Start Stream</string>
+    <string name="btn_stop_stream">Stop Stream</string>
+</resources>

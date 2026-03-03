@@ -1,0 +1,13 @@
+<Page
+    x:Class="Acb.Gui.Pages.HomePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Padding="24">
+        <StackPanel Spacing="12">
+            <TextBlock Text="ACB Receiver" FontSize="28" FontWeight="SemiBold" />
+            <TextBlock Text="简约控制面板（v0.2）" Opacity="0.7" />
+            <Button Content="Refresh Devices" Click="OnRefresh" Width="180" />
+            <TextBox x:Name="OutputBox" TextWrapping="Wrap" AcceptsReturn="True" Height="240" IsReadOnly="True" />
+        </StackPanel>
+    </Grid>
+</Page>

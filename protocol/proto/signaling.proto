@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package acb.protocol.v1;
+
+message Envelope {
+  uint32 version = 1;
+  string type = 2;
+  bytes payload = 3;
+}
+
+message VideoConfig {
+  uint32 width = 1;
+  uint32 height = 2;
+  uint32 fps = 3;
+  uint32 bitrate = 4;
+}
+
+message AudioConfig {
+  bool enabled = 1;
+}
+
+enum Transport {
+  TRANSPORT_UNSPECIFIED = 0;
+  TRANSPORT_LAN = 1;
+  TRANSPORT_USB_ADB = 2;
+  TRANSPORT_USB_NATIVE = 3;
+}
+
+message SessionOffer {
+  string session_id = 1;
+  Transport transport = 2;
+  string offer_sdp = 3;
+  string device_id = 4;
+  VideoConfig video = 5;
+  AudioConfig audio = 6;
+}
+
+message SessionAnswer {
+  string session_id = 1;
+  string answer_sdp = 2;
+}
+
+message IceCandidate {
+  string session_id = 1;
+  string candidate = 2;
+  string sdp_mid = 3;
+  uint32 sdp_mline_index = 4;
+}
+
+message TransportHint {
+  string session_id = 1;
+  repeated Transport preferred = 2;
+}

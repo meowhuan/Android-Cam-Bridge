@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Android Cam Bridge"
+           Manufacturer="ACB"
+           Version="0.1.0"
+           UpgradeCode="7f4c6d64-11f5-4d62-b5e8-7fe2b2f4d9d1">
+
+    <MediaTemplate />
+
+    <Feature Id="MainFeature" Title="Android Cam Bridge" Level="1">
+      <ComponentGroupRef Id="ReceiverComponents" />
+      <ComponentGroupRef Id="ObsPluginComponents" />
+      <ComponentGroupRef Id="VirtualCamComponents" />
+    </Feature>
+
+    <Fragment>
+      <ComponentGroup Id="ReceiverComponents" Directory="INSTALLFOLDER">
+        <!-- TODO: add receiver binaries -->
+      </ComponentGroup>
+      <ComponentGroup Id="ObsPluginComponents" Directory="INSTALLFOLDER">
+        <!-- TODO: add OBS plugin binaries -->
+      </ComponentGroup>
+      <ComponentGroup Id="VirtualCamComponents" Directory="INSTALLFOLDER">
+        <!-- v0.2 optional component -->
+      </ComponentGroup>
+    </Fragment>
+
+  </Package>
+</Wix>
