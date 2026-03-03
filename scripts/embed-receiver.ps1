@@ -1,9 +1,17 @@
 #Requires -Version 7.0
 param(
-    [string]$ReceiverExe = "F:\droidcam\build\windows\receiver\Release\acb-receiver.exe",
-    [string]$OutputFile = "F:\droidcam\windows\gui\Acb.Gui\Generated\BundledReceiverData.g.cs",
+    [string]$ReceiverExe = "",
+    [string]$OutputFile = "",
     [int]$ChunkSize = 8000
 )
+
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+if (-not $ReceiverExe) {
+    $ReceiverExe = Join-Path $repoRoot "build\windows\receiver\Release\acb-receiver.exe"
+}
+if (-not $OutputFile) {
+    $OutputFile = Join-Path $repoRoot "windows\gui\Acb.Gui\Generated\BundledReceiverData.g.cs"
+}
 
 if (!(Test-Path $ReceiverExe)) {
     throw "Receiver binary not found: $ReceiverExe"

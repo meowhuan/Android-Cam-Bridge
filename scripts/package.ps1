@@ -1,6 +1,6 @@
 #Requires -Version 7.0
 param(
-  [string]$Version = "0.2.4",
+  [string]$Version = "0.2.3",
   [string]$OutDir = ""
 )
 
@@ -14,15 +14,24 @@ $outRoot = (Resolve-Path (New-Item -ItemType Directory -Path $OutDir -Force)).Pa
 
 Write-Host "Packaging ACB version $Version"
 
+cmake -S $repoRoot -B (Join-Path $repoRoot "build") -G "Visual Studio 17 2022" -A x64
 cmake --build (Join-Path $repoRoot "build") --config Release --target acb-receiver
 cmake --build (Join-Path $repoRoot "build") --config Release --target acb-obs-plugin
+
 pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "publish-gui.ps1")
+if ($LASTEXITCODE -ne 0) {
+  throw "GUI publish failed in package step."
+}
 
 $receiverSrc = Join-Path $repoRoot "build\windows\receiver\Release\acb-receiver.exe"
 $obsDllSrc = Join-Path $repoRoot "build\windows\obs-plugin\Release\acb-obs-plugin.dll"
 $obsEnSrc = Join-Path $repoRoot "windows\obs-plugin\data\locale\en-US.ini"
 $obsZhSrc = Join-Path $repoRoot "windows\obs-plugin\data\locale\zh-CN.ini"
 $guiPublishDir = Join-Path $repoRoot "windows\gui\Acb.Gui\bin\Release\net10.0-windows10.0.19041.0\win-x64\publish"
+
+if (-not (Test-Path $guiPublishDir)) {
+  throw "GUI publish directory not found: $guiPublishDir"
+}
 
 $receiverOut = Join-Path $outRoot "receiver"
 $guiOut = Join-Path $outRoot "gui"

@@ -1,17 +1,21 @@
 #Requires -Version 7.0
-Set-Location "$PSScriptRoot\.."
+$ErrorActionPreference = "Stop"
 
-cmake --build build --config Release --target acb-receiver
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+Set-Location $repoRoot
+
+cmake -S $repoRoot -B (Join-Path $repoRoot "build") -G "Visual Studio 17 2022" -A x64
+cmake --build (Join-Path $repoRoot "build") --config Release --target acb-receiver
 if ($LASTEXITCODE -ne 0) {
     throw "Receiver build failed."
 }
 
-pwsh -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\embed-receiver.ps1"
+pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "embed-receiver.ps1")
 if ($LASTEXITCODE -ne 0) {
     throw "Embed receiver step failed."
 }
 
-Set-Location "$PSScriptRoot\..\windows\gui\Acb.Gui"
+Set-Location (Join-Path $repoRoot "windows\gui\Acb.Gui")
 
 dotnet publish `
   -c Release `
