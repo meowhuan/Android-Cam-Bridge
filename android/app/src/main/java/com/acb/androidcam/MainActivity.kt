@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.view.View
+import android.view.WindowManager
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
@@ -22,6 +24,9 @@ data class ResolutionPreset(val label: String, val width: Int, val height: Int) 
 class MainActivity : AppCompatActivity() {
     private lateinit var controller: CameraController
     private var isLandscapeLocked = false
+    private var keepScreenOnWhileStreaming = true
+    private var controlsVisible = true
+    private var isStreaming = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -31,8 +36,14 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         isLandscapeLocked = savedInstanceState?.getBoolean(KEY_LANDSCAPE_LOCKED)
-            ?: getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_LANDSCAPE_LOCKED, false)
+            ?: prefs.getBoolean(KEY_LANDSCAPE_LOCKED, false)
+        keepScreenOnWhileStreaming = savedInstanceState?.getBoolean(KEY_KEEP_SCREEN_ON)
+            ?: prefs.getBoolean(KEY_KEEP_SCREEN_ON, true)
+        controlsVisible = savedInstanceState?.getBoolean(KEY_CONTROLS_VISIBLE)
+            ?: prefs.getBoolean(KEY_CONTROLS_VISIBLE, true)
+
         applyOrientationLock()
 
         val previewView = findViewById<PreviewView>(R.id.previewView)
@@ -45,7 +56,10 @@ class MainActivity : AppCompatActivity() {
         val transportSpinner = findViewById<Spinner>(R.id.transportSpinner)
         val resolutionSpinner = findViewById<Spinner>(R.id.resolutionSpinner)
         val micCheckbox = findViewById<CheckBox>(R.id.micCheckbox)
+        val sleepProtectionCheckbox = findViewById<CheckBox>(R.id.sleepProtectionCheckbox)
         val orientationButton = findViewById<Button>(R.id.orientationButton)
+        val controlsPanel = findViewById<View>(R.id.controlsPanel)
+        val toggleUiButton = findViewById<Button>(R.id.toggleUiButton)
 
         val transportOptions = listOf("USB ADB", "Wi-Fi")
         val resolutions = listOf(
@@ -59,15 +73,29 @@ class MainActivity : AppCompatActivity() {
         previewView.scaleType = PreviewView.ScaleType.FIT_CENTER
         resolutionSpinner.setSelection(1)
         micCheckbox.isChecked = true
+        sleepProtectionCheckbox.isChecked = keepScreenOnWhileStreaming
         updateOrientationButtonText(orientationButton)
+        applyControlsVisibility(controlsPanel, toggleUiButton)
 
         ensurePermissions()
 
+        sleepProtectionCheckbox.setOnCheckedChangeListener { _, checked ->
+            keepScreenOnWhileStreaming = checked
+            persistFlags()
+            applyKeepScreenOnFlag()
+        }
+
         orientationButton.setOnClickListener {
             isLandscapeLocked = !isLandscapeLocked
-            persistOrientationLock()
+            persistFlags()
             applyOrientationLock()
             updateOrientationButtonText(orientationButton)
+        }
+
+        toggleUiButton.setOnClickListener {
+            controlsVisible = !controlsVisible
+            persistFlags()
+            applyControlsVisibility(controlsPanel, toggleUiButton)
         }
 
         start.setOnClickListener {
@@ -93,17 +121,28 @@ class MainActivity : AppCompatActivity() {
                 bitrate = 5_000_000,
                 pushMic = micCheckbox.isChecked,
             )
+            isStreaming = true
+            applyKeepScreenOnFlag()
             status.text = getString(R.string.status_streaming, preset.label, receiver)
         }
 
         stop.setOnClickListener {
             controller.stop()
+            isStreaming = false
+            applyKeepScreenOnFlag()
             status.text = getString(R.string.status_stopped)
         }
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean(KEY_LANDSCAPE_LOCKED, isLandscapeLocked)
+        outState.putBoolean(KEY_KEEP_SCREEN_ON, keepScreenOnWhileStreaming)
+        outState.putBoolean(KEY_CONTROLS_VISIBLE, controlsVisible)
         super.onSaveInstanceState(outState)
     }
 
@@ -115,11 +154,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun persistOrientationLock() {
+    private fun applyKeepScreenOnFlag() {
+        if (isStreaming && keepScreenOnWhileStreaming) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    private fun persistFlags() {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .edit()
             .putBoolean(KEY_LANDSCAPE_LOCKED, isLandscapeLocked)
+            .putBoolean(KEY_KEEP_SCREEN_ON, keepScreenOnWhileStreaming)
+            .putBoolean(KEY_CONTROLS_VISIBLE, controlsVisible)
             .apply()
+    }
+
+    private fun applyControlsVisibility(panel: View, toggleButton: Button) {
+        panel.visibility = if (controlsVisible) View.VISIBLE else View.GONE
+        toggleButton.text = if (controlsVisible) {
+            getString(R.string.btn_hide_controls)
+        } else {
+            getString(R.string.btn_show_controls)
+        }
     }
 
     private fun updateOrientationButtonText(button: Button) {
@@ -142,5 +200,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val PREFS_NAME = "acb_main"
         private const val KEY_LANDSCAPE_LOCKED = "landscape_locked"
+        private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
+        private const val KEY_CONTROLS_VISIBLE = "controls_visible"
     }
 }

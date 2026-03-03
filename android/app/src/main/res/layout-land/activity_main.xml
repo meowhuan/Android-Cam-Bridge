@@ -9,7 +9,22 @@
         android:layout_height="match_parent"
         android:background="#111111" />
 
+    <Button
+        android:id="@+id/toggleUiButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="12dp"
+        android:minWidth="0dp"
+        android:paddingLeft="10dp"
+        android:paddingTop="6dp"
+        android:paddingRight="10dp"
+        android:paddingBottom="6dp"
+        android:text="@string/btn_hide_controls"
+        android:textAllCaps="false" />
+
     <LinearLayout
+        android:id="@+id/controlsPanel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
@@ -49,7 +64,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="6dp"
-                android:text="@string/btn_orientation_landscape_off" />
+                android:text="@string/btn_orientation_landscape_off"
+                android:textAllCaps="false" />
         </LinearLayout>
 
         <EditText
@@ -72,6 +88,14 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/label_push_mic"
+                android:textColor="#FFFFFF" />
+
+            <CheckBox
+                android:id="@+id/sleepProtectionCheckbox"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="@string/label_sleep_protection"
                 android:textColor="#FFFFFF" />
 
             <Space

@@ -43,9 +43,9 @@ Type: filesandordirs; Name: "{app}\gui\*"; Components: core\gui
 Source: "..\..\dist\acb-win-x64\receiver\acb-receiver.exe"; DestDir: "{app}\receiver"; Flags: ignoreversion; Components: core\receiver
 Source: "..\..\dist\acb-win-x64\gui\*"; DestDir: "{app}\gui"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: core\gui
 Source: "..\..\dist\acb-win-x64\prereqs\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Components: core\gui
-Source: "..\..\dist\acb-win-x64\obs-plugin\acb-obs-plugin.dll"; DestDir: "{code:GetObsPlugin64Dir}"; Flags: ignoreversion; Components: obs\plugin
-Source: "..\..\dist\acb-win-x64\obs-plugin\locale\en-US.ini"; DestDir: "{code:GetObsPluginLocaleDir}"; Flags: ignoreversion; Components: obs\plugin
-Source: "..\..\dist\acb-win-x64\obs-plugin\locale\zh-CN.ini"; DestDir: "{code:GetObsPluginLocaleDir}"; Flags: ignoreversion; Components: obs\plugin
+Source: "..\..\dist\acb-win-x64\obs-plugin\acb-obs-plugin.dll"; DestDir: "{code:GetObsPlugin64Dir}"; Flags: ignoreversion skipifsourcedoesntexist; Components: obs\plugin
+Source: "..\..\dist\acb-win-x64\obs-plugin\locale\en-US.ini"; DestDir: "{code:GetObsPluginLocaleDir}"; Flags: ignoreversion skipifsourcedoesntexist; Components: obs\plugin
+Source: "..\..\dist\acb-win-x64\obs-plugin\locale\zh-CN.ini"; DestDir: "{code:GetObsPluginLocaleDir}"; Flags: ignoreversion skipifsourcedoesntexist; Components: obs\plugin
 
 [Icons]
 Name: "{group}\ACB GUI"; Filename: "{app}\gui\Acb.Gui.exe"; Components: core\gui
@@ -120,12 +120,20 @@ begin
     Result := True;
 end;
 
+function IsValidObsRoot(const Root: string): Boolean;
+var
+  ExePath: string;
+begin
+  ExePath := Root + '\bin\64bit\obs64.exe';
+  Result := DirExists(Root) and FileExists(ExePath);
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
   if CurPageID = ObsPage.ID then begin
-    if not DirExists(ObsPage.Values[0]) then begin
-      MsgBox('OBS Studio directory does not exist: ' + ObsPage.Values[0], mbError, MB_OK);
+    if not IsValidObsRoot(ObsPage.Values[0]) then begin
+      MsgBox('Invalid OBS Studio root (missing bin\\64bit\\obs64.exe): ' + ObsPage.Values[0], mbError, MB_OK);
       Result := False;
     end;
   end;
@@ -150,3 +158,4 @@ begin
     if Installed = 1 then
       Result := False;
 end;
+

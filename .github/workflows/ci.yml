@@ -44,15 +44,24 @@ jobs:
         shell: pwsh
         run: |
           cmake -S .tmp-obs-studio -B build-obs-sdk -G "Visual Studio 17 2022" -A x64 -DENABLE_UI=OFF -DENABLE_SCRIPTING=OFF -DENABLE_HEVC=OFF
-          cmake --build build-obs-sdk --config Release --target obs
+          cmake --build build-obs-sdk --config Release --target libobs
+          if ($LASTEXITCODE -ne 0) {
+            cmake --build build-obs-sdk --config Release --target obs
+          }
 
           $obsInclude = (Resolve-Path ".tmp-obs-studio/libobs").Path
-          $obsGenerated = (Resolve-Path "build-obs-sdk/config").Path
-          $obsLibDir = (Resolve-Path "build-obs-sdk/libobs/Release").Path
+          $obsConfigHeader = Get-ChildItem "build-obs-sdk" -Recurse -Filter "obsconfig.h" | Select-Object -First 1
+          $obsLib = Get-ChildItem "build-obs-sdk" -Recurse -Filter "obs.lib" | Where-Object { $_.FullName -notmatch "\\CMakeFiles\\" } | Select-Object -First 1
 
-          if (-not (Test-Path (Join-Path $obsLibDir "obs.lib"))) {
-            throw "obs.lib not found under $obsLibDir"
-          }
+          if (-not $obsConfigHeader) { throw "obsconfig.h not found under build-obs-sdk" }
+          if (-not $obsLib) { throw "obs.lib not found under build-obs-sdk" }
+
+          $obsGenerated = $obsConfigHeader.Directory.FullName
+          $obsLibDir = $obsLib.Directory.FullName
+
+          Write-Host "OBS include: $obsInclude"
+          Write-Host "OBS generated include: $obsGenerated"
+          Write-Host "OBS lib dir: $obsLibDir"
 
           "OBS_INCLUDE_DIR=$obsInclude" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "OBS_GENERATED_INCLUDE_DIR=$obsGenerated" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -92,3 +101,4 @@ jobs:
           name: acb-android-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+

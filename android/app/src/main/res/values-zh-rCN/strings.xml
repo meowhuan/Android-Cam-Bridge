@@ -2,12 +2,15 @@
     <string name="app_name">安卓摄像头桥接</string>
     <string name="status_idle">空闲</string>
     <string name="status_stopped">已停止</string>
-    <string name="status_streaming">推流中 %1$s -> %2$s</string>
+    <string name="status_streaming">推流中 %1$s -&gt; %2$s</string>
     <string name="hint_receiver_addr">接收端 IP:端口（USB: 127.0.0.1:39393）</string>
     <string name="label_push_mic">推送麦克风音频</string>
+    <string name="label_sleep_protection">推流时防息屏</string>
     <string name="label_lock_landscape">锁定横屏</string>
     <string name="btn_orientation_landscape_off">横屏：关</string>
     <string name="btn_orientation_landscape_on">横屏：开</string>
     <string name="btn_start_stream">开始推流</string>
     <string name="btn_stop_stream">停止推流</string>
+    <string name="btn_hide_controls">隐藏界面</string>
+    <string name="btn_show_controls">显示界面</string>
 </resources>

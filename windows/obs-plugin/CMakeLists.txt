@@ -20,6 +20,8 @@ if (OBS_INCLUDE_DIR
   target_compile_definitions(acb-obs-plugin PRIVATE NOMINMAX)
   set_target_properties(acb-obs-plugin PROPERTIES OUTPUT_NAME "${OBS_PLUGIN_NAME}" PREFIX "")
 
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/acb_obs_build_mode.txt" "real\n")
+
   install(TARGETS acb-obs-plugin
           RUNTIME DESTINATION "obs-studio/plugins/${OBS_PLUGIN_NAME}/bin/64bit"
           LIBRARY DESTINATION "obs-studio/plugins/${OBS_PLUGIN_NAME}/bin/64bit")
@@ -33,4 +35,6 @@ else()
   add_library(acb-obs-plugin MODULE src/plugin_stub.cpp)
   target_compile_definitions(acb-obs-plugin PRIVATE NOMINMAX)
   set_target_properties(acb-obs-plugin PROPERTIES OUTPUT_NAME "${OBS_PLUGIN_NAME}" PREFIX "")
+
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/acb_obs_build_mode.txt" "stub-no-obs-sdk\n")
 endif()
