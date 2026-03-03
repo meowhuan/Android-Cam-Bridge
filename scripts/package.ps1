@@ -16,6 +16,8 @@ if (-not $OutDir) {
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $buildDir = Join-Path $repoRoot "build"
 $outRoot = (Resolve-Path (New-Item -ItemType Directory -Path $OutDir -Force)).Path
+$stagingDir = Join-Path $outRoot "_staging"
+New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
 
 function Reset-BuildDirIfSourceChanged {
   param([string]$Dir, [string]$ExpectedSource)
@@ -36,8 +38,18 @@ function Find-BuildFile {
     [string]$Name
   )
   return Get-ChildItem $Root -Recurse -File -Filter $Name |
-    Where-Object { $_.FullName -notmatch "\\CMakeFiles\\" } |
     Select-Object -First 1
+}
+
+function Find-BuildPluginDll {
+  param([string]$Root)
+  $exact = Get-ChildItem $Root -Recurse -File -Filter "acb-obs-plugin.dll" | Select-Object -First 1
+  if ($exact) { return $exact }
+
+  $fuzzy = Get-ChildItem $Root -Recurse -File -Filter "*obs*plugin*.dll" |
+    Where-Object { $_.Name -like "*acb*" } |
+    Select-Object -First 1
+  return $fuzzy
 }
 
 Write-Host "Packaging ACB version $Version"
@@ -58,6 +70,26 @@ cmake @cmakeArgs
 cmake --build $buildDir --config Release --target acb-receiver
 cmake --build $buildDir --config Release --target acb-obs-plugin
 
+$obsBuildModeFile = Join-Path $repoRoot "build\windows\obs-plugin\acb_obs_build_mode.txt"
+$obsBuildMode = ""
+if (Test-Path $obsBuildModeFile) {
+  $obsBuildMode = (Get-Content $obsBuildModeFile -Raw).Trim()
+}
+$hasRealObsPlugin = ($obsBuildMode -eq "real")
+
+$stagedObsDll = ""
+if ($hasRealObsPlugin) {
+  $obsDllFile = Find-BuildPluginDll -Root $buildDir
+  if (-not $obsDllFile) {
+    Write-Host "Available DLL files under build directory:"
+    Get-ChildItem $buildDir -Recurse -Filter "*.dll" | Select-Object -First 200 -ExpandProperty FullName | ForEach-Object { Write-Host "  $_" }
+    throw "OBS plugin build mode is real but acb-obs-plugin.dll was not found under $buildDir"
+  }
+
+  $stagedObsDll = Join-Path $stagingDir "acb-obs-plugin.dll"
+  Copy-Item $obsDllFile.FullName $stagedObsDll -Force
+}
+
 pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "publish-gui.ps1") -ObsIncludeDir $ObsIncludeDir -ObsGeneratedIncludeDir $ObsGeneratedIncludeDir -ObsLibDir $ObsLibDir
 if ($LASTEXITCODE -ne 0) {
   throw "GUI publish failed in package step."
@@ -69,34 +101,19 @@ if (-not $receiverFile) {
 }
 $receiverSrc = $receiverFile.FullName
 
-$obsDllFile = Find-BuildFile -Root $buildDir -Name "acb-obs-plugin.dll"
-$obsDllSrc = if ($obsDllFile) { $obsDllFile.FullName } else { "" }
-
 $obsEnSrc = Join-Path $repoRoot "windows\obs-plugin\data\locale\en-US.ini"
 $obsZhSrc = Join-Path $repoRoot "windows\obs-plugin\data\locale\zh-CN.ini"
-$obsBuildModeFile = Join-Path $repoRoot "build\windows\obs-plugin\acb_obs_build_mode.txt"
 $guiPublishDir = Join-Path $repoRoot "windows\gui\Acb.Gui\bin\Release\net10.0-windows10.0.19041.0\win-x64\publish"
 
 if (-not (Test-Path $guiPublishDir)) {
   throw "GUI publish directory not found: $guiPublishDir"
 }
 
-$obsBuildMode = ""
-if (Test-Path $obsBuildModeFile) {
-  $obsBuildMode = (Get-Content $obsBuildModeFile -Raw).Trim()
-}
-$hasRealObsPlugin = ($obsBuildMode -eq "real")
 if (-not $hasRealObsPlugin) {
   Write-Warning "OBS plugin was built as '$obsBuildMode'. A loadable OBS plugin will NOT be packaged. Configure OBS SDK paths for real plugin builds."
   if ($RequireRealObsPlugin) {
     throw "RequireRealObsPlugin=true but build mode is '$obsBuildMode'."
   }
-}
-
-if ($hasRealObsPlugin -and [string]::IsNullOrWhiteSpace($obsDllSrc)) {
-  Write-Host "Available DLL files under build directory:"
-  Get-ChildItem $buildDir -Recurse -Filter "*.dll" | Select-Object -First 100 -ExpandProperty FullName | ForEach-Object { Write-Host "  $_" }
-  throw "OBS plugin build mode is real but acb-obs-plugin.dll was not found under $buildDir"
 }
 
 $receiverOut = Join-Path $outRoot "receiver"
@@ -108,10 +125,13 @@ Copy-Item $receiverSrc (Join-Path $receiverOut "acb-receiver.exe") -Force
 Copy-Item (Join-Path $guiPublishDir "*") $guiOut -Recurse -Force
 
 if ($hasRealObsPlugin) {
+  if (-not (Test-Path $stagedObsDll)) {
+    throw "Staged OBS plugin DLL missing: $stagedObsDll"
+  }
   $obsOut = Join-Path $outRoot "obs-plugin"
   $obsLocaleOut = Join-Path $obsOut "locale"
   New-Item -ItemType Directory -Path $obsLocaleOut -Force | Out-Null
-  Copy-Item $obsDllSrc (Join-Path $obsOut "acb-obs-plugin.dll") -Force
+  Copy-Item $stagedObsDll (Join-Path $obsOut "acb-obs-plugin.dll") -Force
   Copy-Item $obsEnSrc (Join-Path $obsLocaleOut "en-US.ini") -Force
   Copy-Item $obsZhSrc (Join-Path $obsLocaleOut "zh-CN.ini") -Force
 }
