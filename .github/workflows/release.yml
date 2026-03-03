@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   build-and-release:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,7 +31,8 @@ jobs:
           repository: obsproject/obs-studio
           ref: 32.0.4
           path: .tmp-obs-studio
-          fetch-depth: 1
+          fetch-depth: 0
+          submodules: recursive
 
       - name: Resolve version
         id: version
@@ -197,4 +198,6 @@ jobs:
             dist/release-assets/ACB-Android-${{ steps.version.outputs.value }}.apk
             dist/release-assets/SHA256SUMS.txt
             dist/release-assets/*.asc
+
+
 
