@@ -44,24 +44,40 @@ jobs:
         shell: pwsh
         run: |
           cmake -S .tmp-obs-studio -B build-obs-sdk -G "Visual Studio 17 2022" -A x64 -DENABLE_UI=OFF -DENABLE_SCRIPTING=OFF -DENABLE_HEVC=OFF
+
           cmake --build build-obs-sdk --config Release --target libobs
           if ($LASTEXITCODE -ne 0) {
             cmake --build build-obs-sdk --config Release --target obs
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to build OBS SDK targets (libobs/obs)."
+            }
           }
 
           $obsInclude = (Resolve-Path ".tmp-obs-studio/libobs").Path
           $obsConfigHeader = Get-ChildItem "build-obs-sdk" -Recurse -Filter "obsconfig.h" | Select-Object -First 1
-          $obsLib = Get-ChildItem "build-obs-sdk" -Recurse -Filter "obs.lib" | Where-Object { $_.FullName -notmatch "\\CMakeFiles\\" } | Select-Object -First 1
+          $obsLib = Get-ChildItem "build-obs-sdk" -Recurse -File | Where-Object {
+            $_.Name -in @("obs.lib", "libobs.lib") -and $_.FullName -notmatch "\\CMakeFiles\\"
+          } | Select-Object -First 1
 
           if (-not $obsConfigHeader) { throw "obsconfig.h not found under build-obs-sdk" }
-          if (-not $obsLib) { throw "obs.lib not found under build-obs-sdk" }
+          if (-not $obsLib) {
+            Write-Host "Available .lib files under build-obs-sdk:"
+            Get-ChildItem "build-obs-sdk" -Recurse -Filter "*.lib" | Select-Object -First 100 -ExpandProperty FullName | ForEach-Object { Write-Host "  $_" }
+            throw "Neither obs.lib nor libobs.lib found under build-obs-sdk"
+          }
+
+          if ($obsLib.Name -eq "libobs.lib") {
+            $obsAlias = Join-Path $obsLib.Directory.FullName "obs.lib"
+            Copy-Item $obsLib.FullName $obsAlias -Force
+            $obsLib = Get-Item $obsAlias
+          }
 
           $obsGenerated = $obsConfigHeader.Directory.FullName
           $obsLibDir = $obsLib.Directory.FullName
 
           Write-Host "OBS include: $obsInclude"
           Write-Host "OBS generated include: $obsGenerated"
-          Write-Host "OBS lib dir: $obsLibDir"
+          Write-Host "OBS lib: $($obsLib.FullName)"
 
           "OBS_INCLUDE_DIR=$obsInclude" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "OBS_GENERATED_INCLUDE_DIR=$obsGenerated" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -101,4 +117,3 @@ jobs:
           name: acb-android-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-
