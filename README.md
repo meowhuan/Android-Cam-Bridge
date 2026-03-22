@@ -28,6 +28,24 @@
 4. OBS 插件优先拉取 `/api/v2/frame.bgra`，失败时回退 `/api/v1/frame.jpg`
 5. GUI 通过 Receiver HTTP API 做 ADB 设置、会话管理和统计查看
 
+## VirtualCam Bridge 虚拟摄像头实现
+
+当前实现采用“桥接进程 + 现有虚拟摄像头驱动”两段式方案：
+
+1. `acb-virtualcam-bridge` 从 Receiver 拉取 `GET /api/v2/frame.bgra`
+2. 桥接进程将 BGRA 帧写入共享内存 `Local\acb_virtualcam_frame`
+3. 通过命名管道 `\\.\pipe\acb-virtualcam-control` 提供 `START/STOP/STATUS/SET_RECEIVER/SET_INTERVAL/EXIT` 控制
+4. 消费端（`scripts/virtualcam_consumer.py`）读取共享内存并通过 `pyvirtualcam` 推送给系统虚拟摄像头设备（如 UnityCapture）
+
+说明：
+- Bridge 负责稳定采帧与本地 IPC，不直接注册系统摄像头驱动。
+- 系统摄像头枚举能力由虚拟摄像头驱动提供（当前默认使用 UnityCapture）。
+
+快速启动（Windows）：
+```powershell
+pwsh .\scripts\start-virtualcam.ps1 -Receiver "127.0.0.1:39393" -Fps 30
+```
+
 ## API 概览
 
 Receiver 默认地址：`http://127.0.0.1:39393`

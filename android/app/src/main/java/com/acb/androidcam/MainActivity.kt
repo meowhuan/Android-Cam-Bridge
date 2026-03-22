@@ -3,10 +3,11 @@ package com.acb.androidcam
 import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
-import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
@@ -14,12 +15,16 @@ import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 data class ResolutionPreset(val label: String, val width: Int, val height: Int) {
     override fun toString(): String = label
@@ -31,8 +36,13 @@ class MainActivity : AppCompatActivity() {
     private var keepScreenOnWhileStreaming = true
     private var backgroundStreamingEnabled = false
     private var controlsVisible = true
+    private var debugModeEnabled = false
     private var isStreaming = false
     private var statusTextView: TextView? = null
+    private var debugOverlayView: View? = null
+    private var debugLogScrollView: ScrollView? = null
+    private var debugLogTextView: TextView? = null
+    private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.US)
 
     private val streamingStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -63,14 +73,24 @@ class MainActivity : AppCompatActivity() {
             ?: prefs.getBoolean(KEY_BACKGROUND_STREAMING, false)
         controlsVisible = savedInstanceState?.getBoolean(KEY_CONTROLS_VISIBLE)
             ?: prefs.getBoolean(KEY_CONTROLS_VISIBLE, true)
+        debugModeEnabled = savedInstanceState?.getBoolean(KEY_DEBUG_MODE)
+            ?: prefs.getBoolean(KEY_DEBUG_MODE, false)
 
         applyOrientationLock()
 
-        val previewView = findViewById<PreviewView>(R.id.previewView)
-        controller = CameraController(this, this, previewView)
-
         val status = findViewById<TextView>(R.id.statusText)
         statusTextView = status
+        debugOverlayView = findViewById(R.id.debugOverlay)
+        debugLogScrollView = findViewById(R.id.debugLogScroll)
+        debugLogTextView = findViewById(R.id.debugLogText)
+        val previewView = findViewById<PreviewView>(R.id.previewView)
+        controller = CameraController(this, this, previewView) { msg ->
+            runOnUiThread {
+                if (debugModeEnabled) {
+                    appendDebugLogLine(msg)
+                }
+            }
+        }
         val start = findViewById<Button>(R.id.startButton)
         val stop = findViewById<Button>(R.id.stopButton)
         val hostInput = findViewById<EditText>(R.id.hostInput)
@@ -79,9 +99,12 @@ class MainActivity : AppCompatActivity() {
         val micCheckbox = findViewById<CheckBox>(R.id.micCheckbox)
         val sleepProtectionCheckbox = findViewById<CheckBox>(R.id.sleepProtectionCheckbox)
         val backgroundStreamingCheckbox = findViewById<CheckBox>(R.id.backgroundStreamingCheckbox)
+        val debugModeCheckbox = findViewById<CheckBox?>(R.id.debugModeCheckbox)
         val orientationButton = findViewById<Button>(R.id.orientationButton)
         val controlsPanel = findViewById<View>(R.id.controlsPanel)
         val toggleUiButton = findViewById<Button>(R.id.toggleUiButton)
+        val debugOverlayCloseButton = findViewById<Button?>(R.id.debugOverlayCloseButton)
+        val debugOverlayClearButton = findViewById<Button?>(R.id.debugOverlayClearButton)
 
         val transportOptions = listOf("USB ADB", "USB Native", "Wi-Fi")
         val resolutions = listOf(
@@ -97,8 +120,10 @@ class MainActivity : AppCompatActivity() {
         micCheckbox.isChecked = true
         sleepProtectionCheckbox.isChecked = keepScreenOnWhileStreaming
         backgroundStreamingCheckbox.isChecked = backgroundStreamingEnabled
+        debugModeCheckbox?.isChecked = debugModeEnabled
         updateOrientationButtonText(orientationButton)
         applyControlsVisibility(controlsPanel, toggleUiButton)
+        applyDebugModeUi()
 
         ensurePermissions()
 
@@ -111,6 +136,23 @@ class MainActivity : AppCompatActivity() {
         backgroundStreamingCheckbox.setOnCheckedChangeListener { _, checked ->
             backgroundStreamingEnabled = checked
             persistFlags()
+        }
+        debugModeCheckbox?.setOnCheckedChangeListener { _, checked ->
+            debugModeEnabled = checked
+            persistFlags()
+            applyDebugModeUi()
+            if (checked) {
+                appendDebugLogLine("debug mode enabled")
+            }
+        }
+        debugOverlayCloseButton?.setOnClickListener {
+            debugModeEnabled = false
+            debugModeCheckbox?.isChecked = false
+            persistFlags()
+            applyDebugModeUi()
+        }
+        debugOverlayClearButton?.setOnClickListener {
+            debugLogTextView?.text = ""
         }
 
         orientationButton.setOnClickListener {
@@ -139,9 +181,14 @@ class MainActivity : AppCompatActivity() {
             val receiver = hostInput.text.toString().ifBlank {
                 when (mode) {
                     CameraController.TransportMode.USB_ADB -> "127.0.0.1:39393"
-                    CameraController.TransportMode.USB_NATIVE -> "192.168.42.129:39393"
+                    CameraController.TransportMode.USB_NATIVE -> ""
                     CameraController.TransportMode.LAN -> "192.168.1.100:39393"
                 }
+            }
+            val receiverLabel = if (mode == CameraController.TransportMode.USB_NATIVE && receiver.isBlank()) {
+                "auto-detect"
+            } else {
+                receiver
             }
 
             if (backgroundStreamingEnabled) {
@@ -168,9 +215,9 @@ class MainActivity : AppCompatActivity() {
             isStreaming = true
             applyKeepScreenOnFlag()
             status.text = if (backgroundStreamingEnabled) {
-                getString(R.string.status_streaming_bg, preset.label, receiver)
+                getString(R.string.status_streaming_bg, preset.label, receiverLabel)
             } else {
-                getString(R.string.status_streaming, preset.label, receiver)
+                getString(R.string.status_streaming, preset.label, receiverLabel)
             }
         }
 
@@ -191,7 +238,11 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         val filter = IntentFilter(StreamingService.ACTION_STATUS)
-        registerReceiver(streamingStatusReceiver, filter)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(streamingStatusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(streamingStatusReceiver, filter)
+        }
     }
 
     override fun onStop() {
@@ -207,6 +258,7 @@ class MainActivity : AppCompatActivity() {
         outState.putBoolean(KEY_KEEP_SCREEN_ON, keepScreenOnWhileStreaming)
         outState.putBoolean(KEY_BACKGROUND_STREAMING, backgroundStreamingEnabled)
         outState.putBoolean(KEY_CONTROLS_VISIBLE, controlsVisible)
+        outState.putBoolean(KEY_DEBUG_MODE, debugModeEnabled)
         super.onSaveInstanceState(outState)
     }
 
@@ -233,6 +285,7 @@ class MainActivity : AppCompatActivity() {
             .putBoolean(KEY_KEEP_SCREEN_ON, keepScreenOnWhileStreaming)
             .putBoolean(KEY_BACKGROUND_STREAMING, backgroundStreamingEnabled)
             .putBoolean(KEY_CONTROLS_VISIBLE, controlsVisible)
+            .putBoolean(KEY_DEBUG_MODE, debugModeEnabled)
             .apply()
     }
 
@@ -287,6 +340,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun appendDebugLogLine(message: String) {
+        val tv = debugLogTextView ?: return
+        val line = "[${timeFmt.format(Date())}] $message"
+        val prev = tv.text?.toString().orEmpty()
+        tv.text = if (prev.isBlank()) line else "$prev\n$line"
+        debugLogScrollView?.post {
+            debugLogScrollView?.fullScroll(View.FOCUS_DOWN)
+        }
+    }
+
+    private fun applyDebugModeUi() {
+        debugOverlayView?.visibility = if (debugModeEnabled) View.VISIBLE else View.GONE
+    }
+
     private fun ensurePermissions() {
         val needCamera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
         val needAudio = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
@@ -302,5 +369,6 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         private const val KEY_BACKGROUND_STREAMING = "background_streaming"
         private const val KEY_CONTROLS_VISIBLE = "controls_visible"
+        private const val KEY_DEBUG_MODE = "debug_mode"
     }
 }

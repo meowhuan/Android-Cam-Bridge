@@ -218,6 +218,7 @@ bool HttpRequestBinary(const std::string& host,
   if (!session) {
     return false;
   }
+  WinHttpSetTimeouts(session, 500, 500, 800, 800);
 
   const std::wstring whost = ToWide(host);
   HINTERNET connect = WinHttpConnect(session, whost.c_str(), static_cast<INTERNET_PORT>(port), 0);

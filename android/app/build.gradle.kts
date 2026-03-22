@@ -5,6 +5,18 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+fun projectOrEnv(name: String): String? {
+    val fromProject = findProperty(name)?.toString()?.trim()
+    if (!fromProject.isNullOrEmpty()) return fromProject
+    val fromEnv = System.getenv(name)?.trim()
+    if (!fromEnv.isNullOrEmpty()) return fromEnv
+    return null
+}
+
+fun projectOrEnvInt(name: String, fallback: Int): Int {
+    return projectOrEnv(name)?.toIntOrNull() ?: fallback
+}
+
 android {
     namespace = "com.acb.androidcam"
     compileSdk = 35
@@ -13,15 +25,38 @@ android {
         applicationId = "com.acb.androidcam"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = projectOrEnvInt("ACB_VERSION_CODE", 1)
+        versionName = projectOrEnv("ACB_VERSION_NAME") ?: "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    val releaseStoreFile = projectOrEnv("ACB_UPLOAD_STORE_FILE")
+    val releaseStorePassword = projectOrEnv("ACB_UPLOAD_STORE_PASSWORD")
+    val releaseKeyAlias = projectOrEnv("ACB_UPLOAD_KEY_ALIAS")
+    val releaseKeyPassword = projectOrEnv("ACB_UPLOAD_KEY_PASSWORD")
+    val hasReleaseSigning = !releaseStoreFile.isNullOrBlank() &&
+        !releaseStorePassword.isNullOrBlank() &&
+        !releaseKeyAlias.isNullOrBlank() &&
+        !releaseKeyPassword.isNullOrBlank()
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

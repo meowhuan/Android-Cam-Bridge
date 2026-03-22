@@ -43,6 +43,7 @@ android/local.properties
 *.userosscache
 *.sln.docstates
 .vs/
+.dotnet/
 
 # IDE
 .idea/

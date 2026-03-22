@@ -11,7 +11,7 @@
 - Exposes control commands over named pipe:
   - `\\.\pipe\acb-virtualcam-control`
 
-This allows a future virtual camera producer/driver to consume frames from a stable local IPC contract.
+This allows a virtual camera producer/driver (for example UnityCapture backend via `pyvirtualcam`) to consume frames from a stable local IPC contract.
 
 ## Control commands
 
@@ -39,4 +39,28 @@ Header fields include width/height/frameSize/frameIndex/pts to let consumers rea
 ## Notes
 
 - This is the bridge side implementation.
-- A full system virtual camera exposure still requires a consumer side (DirectShow/MediaFoundation virtual camera provider) to read this shared memory and publish as camera device.
+- A full system virtual camera exposure requires a consumer side to read shared memory and publish as camera device.
+
+## Scheme 1: Use existing virtual camera driver (recommended quick path)
+
+Prerequisites:
+- Install UnityCapture (or another `pyvirtualcam` compatible backend)
+- Python 3.10+
+- `pip install pyvirtualcam numpy`
+
+Start pipeline:
+```powershell
+pwsh .\scripts\start-virtualcam.ps1 -Receiver "127.0.0.1:39393" -Fps 30
+```
+
+Stop bridge pull:
+```powershell
+pwsh .\scripts\stop-virtualcam.ps1
+```
+
+Manual commands:
+```powershell
+pwsh .\scripts\send-vcam-command.ps1 -Command "STATUS"
+pwsh .\scripts\send-vcam-command.ps1 -Command "SET_RECEIVER 127.0.0.1:39393"
+pwsh .\scripts\send-vcam-command.ps1 -Command "START"
+```

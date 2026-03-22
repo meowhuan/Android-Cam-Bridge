@@ -112,10 +112,43 @@ jobs:
         shell: pwsh
         run: ./scripts/build.ps1 -Config Release -ObsIncludeDir "$env:OBS_INCLUDE_DIR" -ObsGeneratedIncludeDir "$env:OBS_GENERATED_INCLUDE_DIR" -ObsLibDir "$env:OBS_LIB_DIR"
 
+      - name: Prepare Android signing keystore
+        shell: pwsh
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          $hasSigning = -not [string]::IsNullOrWhiteSpace($env:ANDROID_KEYSTORE_BASE64) `
+            -and -not [string]::IsNullOrWhiteSpace($env:ANDROID_KEYSTORE_PASSWORD) `
+            -and -not [string]::IsNullOrWhiteSpace($env:ANDROID_KEY_ALIAS) `
+            -and -not [string]::IsNullOrWhiteSpace($env:ANDROID_KEY_PASSWORD)
+          if (-not $hasSigning) {
+            Write-Host "Android release signing disabled: missing one or more ANDROID_* secrets."
+            return
+          }
+
+          $keystorePath = (Resolve-Path ".\android").Path + "\acb-release.jks"
+          [IO.File]::WriteAllBytes($keystorePath, [Convert]::FromBase64String($env:ANDROID_KEYSTORE_BASE64))
+
+          "ACB_UPLOAD_STORE_FILE=$keystorePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ACB_UPLOAD_STORE_PASSWORD=$env:ANDROID_KEYSTORE_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ACB_UPLOAD_KEY_ALIAS=$env:ANDROID_KEY_ALIAS" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ACB_UPLOAD_KEY_PASSWORD=$env:ANDROID_KEY_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Android signing keystore prepared."
+
       - name: Build Android release APK
         shell: pwsh
         working-directory: ./android
-        run: gradle :app:assembleRelease --no-daemon
+        run: |
+          $args = @(
+            ":app:assembleRelease",
+            "--no-daemon",
+            "-PACB_VERSION_NAME=${{ steps.version.outputs.value }}",
+            "-PACB_VERSION_CODE=${{ github.run_number }}"
+          )
+          gradle @args
 
       - name: Build installer (require real OBS plugin)
         shell: pwsh
@@ -248,7 +281,6 @@ jobs:
             dist/release-assets/ACB-Android-${{ steps.version.outputs.value }}.apk
             dist/release-assets/SHA256SUMS.txt
             dist/release-assets/*.asc
-
 
 
 

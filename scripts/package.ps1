@@ -21,14 +21,45 @@ New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
 
 function Reset-BuildDirIfSourceChanged {
   param([string]$Dir, [string]$ExpectedSource)
+  function Normalize-SourcePath([string]$PathValue) {
+    if ([string]::IsNullOrWhiteSpace($PathValue)) { return "" }
+    $p = $PathValue.Trim()
+    $p = $p -replace '\\', '/'
+    $p = $p.TrimEnd('/')
+    return $p.ToLowerInvariant()
+  }
+
+  function Remove-DirRobust([string]$TargetDir) {
+    $attempts = 0
+    while ($attempts -lt 3) {
+      try {
+        Remove-Item $TargetDir -Recurse -Force -ErrorAction Stop
+        return
+      } catch {
+        $attempts++
+        if ($attempts -eq 1) {
+          Write-Warning "Build directory is locked. Attempting to stop ACB/OBS processes and retry..."
+          Get-Process -Name "acb-virtualcam-bridge","acb-receiver","obs64","obs32" -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Milliseconds 500
+        if ($attempts -ge 3) {
+          throw
+        }
+      }
+    }
+  }
+
   $cache = Join-Path $Dir "CMakeCache.txt"
   if (-not (Test-Path $cache)) { return }
   $line = Select-String -Path $cache -Pattern '^CMAKE_HOME_DIRECTORY:INTERNAL=' -SimpleMatch:$false | Select-Object -First 1
   if (-not $line) { return }
   $actual = ($line.Line -split '=', 2)[1].Trim()
-  if ($actual -ne $ExpectedSource) {
+  $actualNorm = Normalize-SourcePath $actual
+  $expectedNorm = Normalize-SourcePath $ExpectedSource
+  if ($actualNorm -ne $expectedNorm) {
     Write-Warning "CMake source changed ($actual -> $ExpectedSource). Recreating $Dir"
-    Remove-Item $Dir -Recurse -Force
+    Remove-DirRobust $Dir
   }
 }
 
