@@ -25,6 +25,7 @@ class V2MediaClient {
     private var ws: WebSocket? = null
     private val connected = AtomicBoolean(false)
     private val frameIndex = AtomicLong(0)
+    private val lastConnectedAtMs = AtomicLong(0)
 
     data class SessionInfo(
         val sessionId: String,
@@ -70,6 +71,7 @@ class V2MediaClient {
         ws = http.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 connected.set(true)
+                lastConnectedAtMs.set(System.currentTimeMillis())
                 Log.i("ACB", "v2 websocket connected")
             }
 
@@ -83,6 +85,10 @@ class V2MediaClient {
             }
         })
     }
+
+    fun isConnected(): Boolean = connected.get()
+
+    fun getLastConnectedAtMs(): Long = lastConnectedAtMs.get()
 
     fun sendVideoFrame(payload: ByteArray, isKeyframe: Boolean) {
         if (!connected.get()) return

@@ -9,6 +9,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Windows.Graphics;
 using WinRT.Interop;
 
@@ -18,7 +19,10 @@ public sealed partial class MainWindow : Window
 {
     private readonly ReceiverApiClient _client = new();
     private readonly DispatcherTimer _statsTimer = new() { Interval = TimeSpan.FromSeconds(5) };
+    private readonly DispatcherTimer _usbNativeTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private bool _autoRefreshEnabled;
+    private bool _usbNativeRefreshInProgress;
+    private int _usbNativeTickCount;
     private Process? _receiverProcess;
     private bool _receiverStartedByGui;
     private bool _uiInitialized;
@@ -28,6 +32,8 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         TryResizeWindow(1320, 840);
         _statsTimer.Tick += OnStatsTimerTick;
+        _usbNativeTimer.Tick += OnUsbNativeTimerTick;
+        _usbNativeTimer.Start();
         Closed += OnWindowClosed;
         _uiInitialized = true;
         ApplyLanguage();
@@ -128,6 +134,10 @@ public sealed partial class MainWindow : Window
             {
                 SessionIdBox.Text = sessionId;
             }
+            if (transport == "usb-native")
+            {
+                await RefreshUsbNativeStatusAndLinkAsync();
+            }
         }
         catch (Exception ex)
         {
@@ -212,6 +222,76 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void OnRefreshUsbNativeDevices(object sender, RoutedEventArgs e)
+    {
+        await RefreshUsbNativeDevicesAsync(true);
+    }
+
+    private async void OnRefreshUsbNativeLink(object sender, RoutedEventArgs e)
+    {
+        await RefreshUsbNativeStatusAndLinkAsync(true);
+    }
+
+    private async void OnUsbNativeHandshake(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await EnsureReceiverReadyAsync();
+            var sessionId = SessionIdBox.Text?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(sessionId))
+            {
+                AppendOutput(IsZh() ? "请先启动会话并获取 session id" : "start session first to get session id", "usb-native");
+                return;
+            }
+
+            var devicePath = UsbNativeSelectedDeviceBox.Text?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(devicePath))
+            {
+                AppendOutput(IsZh() ? "请先刷新并选择 USB 设备" : "refresh and select a USB device first", "usb-native");
+                return;
+            }
+
+            var resp = await _client.UsbNativeHandshakeAsync(sessionId, devicePath);
+            AppendOutput(resp, "usb-native handshake");
+            await RefreshUsbNativeStatusAndLinkAsync();
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("usb-native handshake failed", ex);
+            AppendError(ex);
+        }
+    }
+
+    private void OnUsbNativeDeviceSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (UsbNativeDevicesList.SelectedItem is UsbNativeDeviceItem item)
+        {
+            UsbNativeSelectedDeviceBox.Text = item.Path;
+        }
+    }
+
+    private async void OnTransportChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateUsbNativePanelVisibility();
+        if (GetComboValue(TransportBox, "usb-adb") == "usb-native")
+        {
+            await RefreshUsbNativeDevicesAsync(false);
+            await RefreshUsbNativeStatusAndLinkAsync(false);
+        }
+    }
+
+    private async void OnUsbNativeTimerTick(object? sender, object e)
+    {
+        if (_usbNativeRefreshInProgress) return;
+        if (GetComboValue(TransportBox, "usb-adb") != "usb-native") return;
+        _usbNativeTickCount++;
+        await RefreshUsbNativeStatusAndLinkAsync(false);
+        if (_usbNativeTickCount % 5 == 0)
+        {
+            await RefreshUsbNativeDevicesAsync(false);
+        }
+    }
+
     private static string GetComboValue(ComboBox box, string fallback)
     {
         if (box.SelectedItem is ComboBoxItem item)
@@ -250,6 +330,7 @@ public sealed partial class MainWindow : Window
         try
         {
             _statsTimer.Stop();
+            _usbNativeTimer.Stop();
             if ((AutoStopReceiverBox.IsChecked ?? true) && _receiverStartedByGui && _receiverProcess is { HasExited: false })
             {
                 _receiverProcess.Kill(true);
@@ -360,9 +441,13 @@ public sealed partial class MainWindow : Window
         ResolutionLabelText.Text = zh ? "分辨率" : "Resolution";
         FpsLabelText.Text = "FPS";
         BitrateLabelText.Text = zh ? "视频码率" : "Bitrate";
+        UsbNativePanelTitleText.Text = zh ? "USB Native 面板" : "USB Native Panel";
         ReceiverAddressBox.PlaceholderText = zh ? "Receiver 地址" : "receiver address";
         BitrateBox.PlaceholderText = zh ? "视频码率 bps" : "video bitrate bps";
         SessionIdBox.PlaceholderText = "session id";
+        UsbNativeSelectedDeviceBox.PlaceholderText = zh ? "已选设备路径" : "selected device path";
+        UsbNativeStatusBox.PlaceholderText = zh ? "usb-native 状态" : "usb-native status";
+        UsbNativeLinkBox.PlaceholderText = zh ? "usb-native 链路" : "usb-native link";
 
         ConnectionModeManagedItem.Content = zh ? "托管（自动）" : "Managed";
         ConnectionModeAttachItem.Content = zh ? "附加（仅连接）" : "Attach";
@@ -383,9 +468,13 @@ public sealed partial class MainWindow : Window
         StartSessionButton.Content = zh ? "启动 v2 会话" : "Start v2 Session";
         StopSessionButton.Content = zh ? "停止 v2 会话" : "Stop v2 Session";
         FetchStatsButton.Content = zh ? "获取 v2 统计" : "Fetch v2 Stats";
+        RefreshUsbNativeDevicesButton.Content = zh ? "刷新 USB 设备" : "Refresh USB Devices";
+        UsbNativeHandshakeButton.Content = zh ? "执行握手" : "Handshake";
+        RefreshUsbNativeLinkButton.Content = zh ? "刷新链路" : "Refresh Link";
         AutoRefreshButton.Content = _autoRefreshEnabled
             ? (zh ? "关闭自动刷新（5秒）" : "Disable Auto Refresh (5s)")
             : (zh ? "开启自动刷新（5秒）" : "Auto Refresh Stats (5s)");
+        UpdateUsbNativePanelVisibility();
     }
 
     private void OnLanguageChanged(object sender, SelectionChangedEventArgs e)
@@ -450,5 +539,122 @@ public sealed partial class MainWindow : Window
     private void AppendError(Exception ex)
     {
         AppendOutput($"{ex.GetType().Name}: {ex.Message}", "error");
+    }
+
+    private void UpdateUsbNativePanelVisibility()
+    {
+        UsbNativePanel.Visibility = GetComboValue(TransportBox, "usb-adb") == "usb-native"
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private async Task RefreshUsbNativeDevicesAsync(bool appendOutput)
+    {
+        try
+        {
+            _usbNativeRefreshInProgress = true;
+            await EnsureReceiverReadyAsync();
+            var json = await _client.GetUsbNativeDevicesAsync();
+            PopulateUsbNativeDevices(json);
+            if (appendOutput) AppendOutput(json, "usb-native devices");
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("refresh usb-native devices failed", ex);
+            if (appendOutput) AppendError(ex);
+        }
+        finally
+        {
+            _usbNativeRefreshInProgress = false;
+        }
+    }
+
+    private async Task RefreshUsbNativeStatusAndLinkAsync(bool appendOutput = false)
+    {
+        try
+        {
+            _usbNativeRefreshInProgress = true;
+            await EnsureReceiverReadyAsync();
+            var statusJson = await _client.GetUsbNativeStatusAsync();
+            var linkJson = await _client.GetUsbNativeLinkAsync();
+            UsbNativeStatusBox.Text = statusJson;
+            UsbNativeLinkBox.Text = linkJson;
+            if (appendOutput)
+            {
+                AppendOutput(statusJson, "usb-native status");
+                AppendOutput(linkJson, "usb-native link");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("refresh usb-native status/link failed", ex);
+            if (appendOutput) AppendError(ex);
+        }
+        finally
+        {
+            _usbNativeRefreshInProgress = false;
+        }
+    }
+
+    private void PopulateUsbNativeDevices(string json)
+    {
+        var devices = new List<UsbNativeDeviceItem>();
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("devices", out var arr) && arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in arr.EnumerateArray())
+                {
+                    var path = item.TryGetProperty("path", out var p) ? p.GetString() ?? string.Empty : string.Empty;
+                    var desc = item.TryGetProperty("description", out var d) ? d.GetString() ?? string.Empty : string.Empty;
+                    var androidCandidate = item.TryGetProperty("androidCandidate", out var a) && a.ValueKind == JsonValueKind.True;
+                    devices.Add(new UsbNativeDeviceItem(path, desc, androidCandidate));
+                }
+            }
+        }
+        catch
+        {
+            // Ignore parse errors and keep old list.
+            return;
+        }
+
+        UsbNativeDevicesList.Items.Clear();
+        foreach (var d in devices)
+        {
+            UsbNativeDevicesList.Items.Add(d);
+        }
+
+        var preferred = devices.FirstOrDefault(d => d.AndroidCandidate) ?? devices.FirstOrDefault();
+        if (preferred != null)
+        {
+            UsbNativeDevicesList.SelectedItem = preferred;
+            UsbNativeSelectedDeviceBox.Text = preferred.Path;
+        }
+        else
+        {
+            UsbNativeSelectedDeviceBox.Text = string.Empty;
+        }
+    }
+
+    private sealed class UsbNativeDeviceItem
+    {
+        public string Path { get; }
+        public string Description { get; }
+        public bool AndroidCandidate { get; }
+
+        public UsbNativeDeviceItem(string path, string description, bool androidCandidate)
+        {
+            Path = path;
+            Description = description;
+            AndroidCandidate = androidCandidate;
+        }
+
+        public override string ToString()
+        {
+            var mark = AndroidCandidate ? "[android] " : string.Empty;
+            var label = string.IsNullOrWhiteSpace(Description) ? Path : Description;
+            return mark + label;
+        }
     }
 }

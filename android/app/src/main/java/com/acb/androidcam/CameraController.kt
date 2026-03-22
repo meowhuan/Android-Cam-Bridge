@@ -51,6 +51,7 @@ class CameraController(
     private val v2Client = V2MediaClient()
     private var videoEncoder: VideoAvcEncoder? = null
     private var audioEncoder: AudioAacEncoder? = null
+    private var lastStartAtMs = 0L
 
     fun start(
         transport: TransportMode,
@@ -70,6 +71,7 @@ class CameraController(
         targetHeight = height
 
         Log.i("ACB", "start transport=$transport receiver=$currentReceiver ${width}x$height@$fps bitrate=$bitrate mic=$pushMic")
+        lastStartAtMs = System.currentTimeMillis()
 
         val transportName = when (transport) {
             TransportMode.LAN -> "lan"
@@ -162,6 +164,18 @@ class CameraController(
         } catch (_: Throwable) {
         }
         Log.i("ACB", "stop stream")
+    }
+
+    fun isRunning(): Boolean = running.get()
+
+    fun isHealthy(): Boolean {
+        if (!running.get()) return false
+        val now = System.currentTimeMillis()
+        if (now - lastStartAtMs < 6000) {
+            // Warm-up window for encoder/websocket startup.
+            return true
+        }
+        return v2Client.isConnected()
     }
 
     private data class AudioFxBundle(

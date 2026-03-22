@@ -191,8 +191,18 @@ jobs:
           Set-Content -Path $keyFile -Value $env:GPG_PRIVATE_KEY -Encoding utf8
           gpg --batch --import $keyFile
 
-          $fpr = (gpg --batch --list-secret-keys --with-colons | Select-String '^fpr:' | Select-Object -First 1).ToString().Split(':')[9]
-          if (-not $fpr) { throw "No GPG secret key fingerprint found after import." }
+          $secretKeyLines = gpg --batch --list-secret-keys --with-colons
+          $fprLine = $secretKeyLines | Where-Object { $_ -like "fpr:*" } | Select-Object -First 1
+          if (-not $fprLine) {
+            Write-Host "No secret key found after import. Public keys currently available:"
+            gpg --batch --list-keys --with-colons | Where-Object { $_ -like "pub:*" -or $_ -like "fpr:*" -or $_ -like "uid:*" } | ForEach-Object { Write-Host $_ }
+            throw "No GPG secret key fingerprint found. Ensure GPG_PRIVATE_KEY contains a full armored private key block (-----BEGIN PGP PRIVATE KEY BLOCK-----)."
+          }
+          $parts = $fprLine -split ':'
+          if ($parts.Length -lt 10 -or [string]::IsNullOrWhiteSpace($parts[9])) {
+            throw "Unable to parse GPG secret key fingerprint from: $fprLine"
+          }
+          $fpr = $parts[9]
           "fingerprint=$fpr" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Write-Host "Imported GPG key fingerprint: $fpr"
 

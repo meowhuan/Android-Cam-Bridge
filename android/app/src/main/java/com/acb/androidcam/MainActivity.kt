@@ -1,6 +1,9 @@
 package com.acb.androidcam
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.Intent
@@ -29,6 +32,19 @@ class MainActivity : AppCompatActivity() {
     private var backgroundStreamingEnabled = false
     private var controlsVisible = true
     private var isStreaming = false
+    private var statusTextView: TextView? = null
+
+    private val streamingStatusReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != StreamingService.ACTION_STATUS) return
+            val state = intent.getStringExtra(StreamingService.EXTRA_STATUS_STATE) ?: "unknown"
+            val reason = intent.getStringExtra(StreamingService.EXTRA_STATUS_REASON) ?: ""
+            val receiver = intent.getStringExtra(StreamingService.EXTRA_RECEIVER) ?: ""
+            val reconnect = intent.getIntExtra(StreamingService.EXTRA_STATUS_RECONNECT_COUNT, 0)
+            val line = "FGS: $state / reconnect=$reconnect / $receiver / $reason"
+            statusTextView?.text = line
+        }
+    }
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -54,6 +70,7 @@ class MainActivity : AppCompatActivity() {
         controller = CameraController(this, this, previewView)
 
         val status = findViewById<TextView>(R.id.statusText)
+        statusTextView = status
         val start = findViewById<Button>(R.id.startButton)
         val stop = findViewById<Button>(R.id.stopButton)
         val hostInput = findViewById<EditText>(R.id.hostInput)
@@ -169,6 +186,20 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        val filter = IntentFilter(StreamingService.ACTION_STATUS)
+        registerReceiver(streamingStatusReceiver, filter)
+    }
+
+    override fun onStop() {
+        try {
+            unregisterReceiver(streamingStatusReceiver)
+        } catch (_: Throwable) {
+        }
+        super.onStop()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

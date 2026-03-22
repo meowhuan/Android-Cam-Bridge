@@ -88,6 +88,35 @@ public class ReceiverApiClient
         return await _http.GetStringAsync(BuildUri($"/api/v2/session/{sessionId}/stats"));
     }
 
+    public async Task<string> GetUsbNativeDevicesAsync()
+    {
+        return await _http.GetStringAsync(BuildUri("/api/v2/usb-native/devices"));
+    }
+
+    public async Task<string> GetUsbNativeStatusAsync()
+    {
+        return await _http.GetStringAsync(BuildUri("/api/v2/usb-native/status"));
+    }
+
+    public async Task<string> GetUsbNativeLinkAsync()
+    {
+        return await _http.GetStringAsync(BuildUri("/api/v2/usb-native/link"));
+    }
+
+    public async Task<string> UsbNativeHandshakeAsync(string sessionId, string devicePath, int mtu = 8192)
+    {
+        var payload = JsonSerializer.Serialize(new
+        {
+            sessionId,
+            devicePath,
+            mtu
+        });
+        var resp = await _http.PostAsync(
+            BuildUri("/api/v2/usb-native/handshake"),
+            new StringContent(payload, Encoding.UTF8, "application/json"));
+        return await resp.Content.ReadAsStringAsync();
+    }
+
     private Uri BuildUri(string path)
     {
         return new(_baseUri, path);
