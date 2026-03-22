@@ -5,6 +5,7 @@ import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.graphics.Rect
 import androidx.camera.core.ImageProxy
+import kotlin.math.min
 import java.nio.ByteBuffer
 
 class VideoAvcEncoder(
@@ -16,6 +17,8 @@ class VideoAvcEncoder(
     private val codec: MediaCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
     private val bufferInfo = MediaCodec.BufferInfo()
     private var frameIndex: Long = 0
+    private val fpsValue: Int = if (fps > 0) fps else 30
+    private var codecConfig: ByteArray? = null
 
     init {
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
@@ -32,16 +35,16 @@ class VideoAvcEncoder(
         val input = codec.dequeueInputBuffer(0)
         if (input >= 0) {
             val inBuf = codec.getInputBuffer(input) ?: return
-            val i420 = imageToI420(image)
-            inBuf.clear()
-            if (inBuf.capacity() >= i420.size) {
-                inBuf.put(i420)
-                val ptsUs = (++frameIndex) * 1_000_000L / 30L
-                codec.queueInputBuffer(input, 0, i420.size, ptsUs, 0)
-            } else {
-                codec.queueInputBuffer(input, 0, 0, 0, 0)
+                val i420 = imageToI420(image)
+                inBuf.clear()
+                if (inBuf.capacity() >= i420.size) {
+                    inBuf.put(i420)
+                    val ptsUs = (++frameIndex) * 1_000_000L / fpsValue.toLong()
+                    codec.queueInputBuffer(input, 0, i420.size, ptsUs, 0)
+                } else {
+                    codec.queueInputBuffer(input, 0, 0, 0, 0)
+                }
             }
-        }
 
         while (true) {
             val outIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
@@ -52,8 +55,22 @@ class VideoAvcEncoder(
                 outBuf.position(bufferInfo.offset)
                 outBuf.limit(bufferInfo.offset + bufferInfo.size)
                 outBuf.get(bytes)
+                val isCodecConfig = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
                 val isKey = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-                onEncoded(bytes, isKey)
+                if (isCodecConfig) {
+                    codecConfig = bytes
+                } else {
+                    val output = if (isKey && codecConfig != null && shouldPrependCodecConfig(codecConfig!!)) {
+                        val cfg = codecConfig!!
+                        val merged = ByteArray(cfg.size + bytes.size)
+                        System.arraycopy(cfg, 0, merged, 0, cfg.size)
+                        System.arraycopy(bytes, 0, merged, cfg.size, bytes.size)
+                        merged
+                    } else {
+                        bytes
+                    }
+                    onEncoded(output, isKey)
+                }
             }
             codec.releaseOutputBuffer(outIndex, false)
         }
@@ -68,6 +85,24 @@ class VideoAvcEncoder(
             codec.release()
         } catch (_: Throwable) {
         }
+    }
+
+    private fun shouldPrependCodecConfig(cfg: ByteArray): Boolean {
+        if (cfg.size < 4) return false
+        // Annex-B start code
+        for (i in 0 until min(cfg.size - 3, 32)) {
+            if (cfg[i] == 0.toByte() && cfg[i + 1] == 0.toByte() &&
+                (cfg[i + 2] == 1.toByte() || (cfg[i + 2] == 0.toByte() && cfg[i + 3] == 1.toByte()))
+            ) {
+                return true
+            }
+        }
+        // AVCC length-prefixed NAL (single chunk heuristic)
+        val naluLen = ((cfg[0].toInt() and 0xFF) shl 24) or
+            ((cfg[1].toInt() and 0xFF) shl 16) or
+            ((cfg[2].toInt() and 0xFF) shl 8) or
+            (cfg[3].toInt() and 0xFF)
+        return naluLen in 1 until cfg.size
     }
 
     private fun imageToI420(image: ImageProxy): ByteArray {

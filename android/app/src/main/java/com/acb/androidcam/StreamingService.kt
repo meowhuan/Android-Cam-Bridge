@@ -21,7 +21,7 @@ class StreamingService : LifecycleService() {
     private var cfgReceiver: String = "127.0.0.1:39393"
     private var cfgWidth: Int = 1280
     private var cfgHeight: Int = 720
-    private var cfgFps: Int = 30
+    private var cfgFps: Int = 60
     private var cfgBitrate: Int = 5_000_000
     private var cfgPushMic: Boolean = true
 
@@ -38,7 +38,7 @@ class StreamingService : LifecycleService() {
                 cfgReceiver = intent.getStringExtra(EXTRA_RECEIVER) ?: "127.0.0.1:39393"
                 cfgWidth = intent.getIntExtra(EXTRA_WIDTH, 1280)
                 cfgHeight = intent.getIntExtra(EXTRA_HEIGHT, 720)
-                cfgFps = intent.getIntExtra(EXTRA_FPS, 30)
+                cfgFps = intent.getIntExtra(EXTRA_FPS, 60)
                 cfgBitrate = intent.getIntExtra(EXTRA_BITRATE, 5_000_000)
                 cfgPushMic = intent.getBooleanExtra(EXTRA_PUSH_MIC, true)
                 reconnectCount = 0

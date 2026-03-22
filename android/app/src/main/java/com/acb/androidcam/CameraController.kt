@@ -30,6 +30,7 @@ import java.net.URL
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.min
 
 class CameraController(
     private val context: Context,
@@ -45,6 +46,7 @@ class CameraController(
     private val sessionExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val running = AtomicBoolean(false)
     private val micRunning = AtomicBoolean(false)
+    private val sessionLoopRunning = AtomicBoolean(false)
 
     private var currentMode: TransportMode = TransportMode.USB_ADB
     private var currentReceiver = "127.0.0.1:39393"
@@ -68,8 +70,9 @@ class CameraController(
         running.set(true)
 
         currentMode = transport
+        val normalizedReceiver = receiverAddress.trim()
         currentReceiver = when {
-            receiverAddress.isNotBlank() -> receiverAddress
+            normalizedReceiver.isNotBlank() -> normalizedReceiver
             transport == TransportMode.USB_NATIVE -> ""
             else -> "127.0.0.1:39393"
         }
@@ -86,22 +89,13 @@ class CameraController(
             TransportMode.USB_NATIVE -> "usb-native"
             TransportMode.USB_ADB -> "usb-adb"
         }
-        sessionExecutor.execute {
-            val v2Session = v2Client.startSession(currentReceiver, transportName)
-            if (!running.get()) return@execute
-            if (v2Session != null) {
-                v2Client.connect(v2Session.wsUrl)
-                videoEncoder = VideoAvcEncoder(width, height, bitrate, fps)
-                audioEncoder = AudioAacEncoder(sampleRate = 48_000, channels = 1, bitrate = 96_000)
-                val line = "v2 session connected transport=$transportName receiver=$currentReceiver"
-                Log.i("ACB", line)
-                onDebugEvent?.invoke(line)
-            } else {
-                val line = "v2 session start failed transport=$transportName receiver=$currentReceiver"
-                Log.w("ACB", line)
-                onDebugEvent?.invoke(line)
-            }
-        }
+        startSessionLoop(
+            transportName = transportName,
+            width = width,
+            height = height,
+            fps = fps,
+            bitrate = bitrate,
+        )
 
         val providerFuture = ProcessCameraProvider.getInstance(context)
         providerFuture.addListener({
@@ -419,7 +413,63 @@ class CameraController(
     }
 
     private fun shouldPushLegacyHttp(): Boolean {
-        // USB native mode should run as v2-only media path.
-        return currentMode != TransportMode.USB_NATIVE
+        // Keep legacy path only as bootstrap fallback.
+        // Once v2 is up, disable v1 to avoid dual-path contention and latency spikes.
+        return currentMode != TransportMode.USB_NATIVE && !v2Client.isConnected()
+    }
+
+    private fun startSessionLoop(
+        transportName: String,
+        width: Int,
+        height: Int,
+        fps: Int,
+        bitrate: Int,
+    ) {
+        if (!sessionLoopRunning.compareAndSet(false, true)) return
+        sessionExecutor.execute {
+            var attempt = 0
+            while (running.get()) {
+                if (v2Client.isConnected()) {
+                    sleepQuietly(1000)
+                    continue
+                }
+
+                val v2Session = v2Client.startSession(currentReceiver, transportName)
+                if (!running.get()) break
+
+                if (v2Session != null) {
+                    if (videoEncoder == null) {
+                        videoEncoder = VideoAvcEncoder(width, height, bitrate, fps)
+                    }
+                    if (audioEncoder == null) {
+                        audioEncoder = AudioAacEncoder(sampleRate = 48_000, channels = 1, bitrate = 96_000)
+                    }
+                    v2Client.connect(v2Session.wsUrl)
+                    val line = "v2 session connect attempt ok transport=$transportName receiver=$currentReceiver"
+                    Log.i("ACB", line)
+                    onDebugEvent?.invoke(line)
+                    attempt = 0
+                    // Give websocket/usb-native handshake a short window to settle.
+                    sleepQuietly(1200)
+                } else {
+                    attempt += 1
+                    val backoffMs = min(3000, 500 + attempt * 250)
+                    if (attempt == 1 || attempt % 6 == 0) {
+                        val line = "v2 session retry #$attempt transport=$transportName receiver=$currentReceiver"
+                        Log.w("ACB", line)
+                        onDebugEvent?.invoke(line)
+                    }
+                    sleepQuietly(backoffMs.toLong())
+                }
+            }
+            sessionLoopRunning.set(false)
+        }
+    }
+
+    private fun sleepQuietly(ms: Long) {
+        try {
+            Thread.sleep(ms)
+        } catch (_: Throwable) {
+        }
     }
 }

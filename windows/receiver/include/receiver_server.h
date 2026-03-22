@@ -40,6 +40,8 @@ class ReceiverServer {
     std::vector<uint8_t> v2Bgra;
     uint64_t frameCount = 0;
     uint64_t lastFrameTickMs = 0;
+    uint64_t lastV1FrameTickMs = 0;
+    uint64_t lastV2DecodedTickMs = 0;
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t v2Width = 0;
@@ -88,6 +90,7 @@ class ReceiverServer {
   static uint64_t NowMs();
   bool HandleWebSocketV2(uintptr_t clientSocket, const std::string& rawRequest);
   void ProcessV2MediaPacket(const uint8_t* packet, size_t packetSize);
+  void ProcessUsbV2MediaPacket(const uint8_t* packet, size_t packetSize);
 };
 
 }  // namespace acb::receiver

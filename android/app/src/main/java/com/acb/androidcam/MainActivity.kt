@@ -30,6 +30,10 @@ data class ResolutionPreset(val label: String, val width: Int, val height: Int) 
     override fun toString(): String = label
 }
 
+data class FpsPreset(val label: String, val fps: Int) {
+    override fun toString(): String = label
+}
+
 class MainActivity : AppCompatActivity() {
     private lateinit var controller: CameraController
     private var isLandscapeLocked = false
@@ -37,6 +41,7 @@ class MainActivity : AppCompatActivity() {
     private var backgroundStreamingEnabled = false
     private var controlsVisible = true
     private var debugModeEnabled = false
+    private var selectedFps = 60
     private var isStreaming = false
     private var statusTextView: TextView? = null
     private var debugOverlayView: View? = null
@@ -75,6 +80,8 @@ class MainActivity : AppCompatActivity() {
             ?: prefs.getBoolean(KEY_CONTROLS_VISIBLE, true)
         debugModeEnabled = savedInstanceState?.getBoolean(KEY_DEBUG_MODE)
             ?: prefs.getBoolean(KEY_DEBUG_MODE, false)
+        selectedFps = savedInstanceState?.getInt(KEY_FPS)
+            ?: prefs.getInt(KEY_FPS, 60)
 
         applyOrientationLock()
 
@@ -96,6 +103,7 @@ class MainActivity : AppCompatActivity() {
         val hostInput = findViewById<EditText>(R.id.hostInput)
         val transportSpinner = findViewById<Spinner>(R.id.transportSpinner)
         val resolutionSpinner = findViewById<Spinner>(R.id.resolutionSpinner)
+        val fpsSpinner = findViewById<Spinner>(R.id.fpsSpinner)
         val micCheckbox = findViewById<CheckBox>(R.id.micCheckbox)
         val sleepProtectionCheckbox = findViewById<CheckBox>(R.id.sleepProtectionCheckbox)
         val backgroundStreamingCheckbox = findViewById<CheckBox>(R.id.backgroundStreamingCheckbox)
@@ -112,11 +120,18 @@ class MainActivity : AppCompatActivity() {
             ResolutionPreset("1280x720", 1280, 720),
             ResolutionPreset("1920x1080", 1920, 1080)
         )
+        val fpsOptions = listOf(
+            FpsPreset("30 FPS", 30),
+            FpsPreset("60 FPS", 60),
+        )
 
         transportSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, transportOptions)
         resolutionSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, resolutions)
+        fpsSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, fpsOptions)
         previewView.scaleType = PreviewView.ScaleType.FIT_CENTER
         resolutionSpinner.setSelection(1)
+        val fpsIndex = fpsOptions.indexOfFirst { it.fps == selectedFps }.let { if (it < 0) 1 else it }
+        fpsSpinner.setSelection(fpsIndex)
         micCheckbox.isChecked = true
         sleepProtectionCheckbox.isChecked = keepScreenOnWhileStreaming
         backgroundStreamingCheckbox.isChecked = backgroundStreamingEnabled
@@ -178,7 +193,10 @@ class MainActivity : AppCompatActivity() {
             }
 
             val preset = resolutionSpinner.selectedItem as ResolutionPreset
-            val receiver = hostInput.text.toString().ifBlank {
+            val fpsPreset = fpsSpinner.selectedItem as FpsPreset
+            selectedFps = fpsPreset.fps
+            persistFlags()
+            val receiver = hostInput.text.toString().trim().ifBlank {
                 when (mode) {
                     CameraController.TransportMode.USB_ADB -> "127.0.0.1:39393"
                     CameraController.TransportMode.USB_NATIVE -> ""
@@ -207,7 +225,7 @@ class MainActivity : AppCompatActivity() {
                     receiverAddress = receiver,
                     width = preset.width,
                     height = preset.height,
-                    fps = 30,
+                    fps = selectedFps,
                     bitrate = 5_000_000,
                     pushMic = micCheckbox.isChecked,
                 )
@@ -259,6 +277,7 @@ class MainActivity : AppCompatActivity() {
         outState.putBoolean(KEY_BACKGROUND_STREAMING, backgroundStreamingEnabled)
         outState.putBoolean(KEY_CONTROLS_VISIBLE, controlsVisible)
         outState.putBoolean(KEY_DEBUG_MODE, debugModeEnabled)
+        outState.putInt(KEY_FPS, selectedFps)
         super.onSaveInstanceState(outState)
     }
 
@@ -286,6 +305,7 @@ class MainActivity : AppCompatActivity() {
             .putBoolean(KEY_BACKGROUND_STREAMING, backgroundStreamingEnabled)
             .putBoolean(KEY_CONTROLS_VISIBLE, controlsVisible)
             .putBoolean(KEY_DEBUG_MODE, debugModeEnabled)
+            .putInt(KEY_FPS, selectedFps)
             .apply()
     }
 
@@ -309,7 +329,7 @@ class MainActivity : AppCompatActivity() {
             putExtra(StreamingService.EXTRA_RECEIVER, receiver)
             putExtra(StreamingService.EXTRA_WIDTH, width)
             putExtra(StreamingService.EXTRA_HEIGHT, height)
-            putExtra(StreamingService.EXTRA_FPS, 30)
+            putExtra(StreamingService.EXTRA_FPS, selectedFps)
             putExtra(StreamingService.EXTRA_BITRATE, 5_000_000)
             putExtra(StreamingService.EXTRA_PUSH_MIC, pushMic)
         }
@@ -370,5 +390,6 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_BACKGROUND_STREAMING = "background_streaming"
         private const val KEY_CONTROLS_VISIBLE = "controls_visible"
         private const val KEY_DEBUG_MODE = "debug_mode"
+        private const val KEY_FPS = "fps"
     }
 }

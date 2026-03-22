@@ -573,6 +573,20 @@ bool ConvertAvccToAnnexB(const uint8_t* data, size_t size, std::vector<uint8_t>*
   return !out->empty();
 }
 
+bool LooksLikeAvcDecoderConfigurationRecord(const uint8_t* data, size_t size) {
+  if (data == nullptr || size < 7) return false;
+  // AVCDecoderConfigurationRecord starts with configurationVersion=1.
+  if (data[0] != 0x01) return false;
+  if (HasAnnexBStartCode(data, size)) return false;
+  // If first 4 bytes look like a valid NAL length, this is more likely AVCC NAL stream, not config record.
+  const uint32_t naluLen = (static_cast<uint32_t>(data[0]) << 24) |
+                           (static_cast<uint32_t>(data[1]) << 16) |
+                           (static_cast<uint32_t>(data[2]) << 8) |
+                           static_cast<uint32_t>(data[3]);
+  if (naluLen > 0 && naluLen + 4 <= size) return false;
+  return true;
+}
+
 template <typename T>
 void SafeRelease(T** p) {
   if (p && *p) {
@@ -1244,7 +1258,7 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
     if (!payloadBase64.empty()) {
       const auto packet = Base64Decode(payloadBase64);
       if (!packet.empty()) {
-        ProcessV2MediaPacket(packet.data(), packet.size());
+        ProcessUsbV2MediaPacket(packet.data(), packet.size());
       } else {
         std::lock_guard<std::mutex> lock(usbLinkMutex_);
         usbLinkLastError_ = "invalid_payload_base64";
@@ -1377,6 +1391,7 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
     frameState_.jpeg.clear();
     frameState_.width = 0;
     frameState_.height = 0;
+    frameState_.lastV1FrameTickMs = 0;
     return Json(200, R"({"ok":true})");
   }
 
@@ -1386,6 +1401,10 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
       frameState_.jpeg.clear();
       frameState_.width = 0;
       frameState_.height = 0;
+      frameState_.v2Bgra.clear();
+      frameState_.v2Width = 0;
+      frameState_.v2Height = 0;
+      frameState_.lastV2DecodedTickMs = 0;
     }
     {
       std::lock_guard<std::mutex> lock(usbLinkMutex_);
@@ -1420,11 +1439,13 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
 
     {
       std::lock_guard<std::mutex> lock(frameMutex_);
+      const uint64_t nowMs = NowMs();
       frameState_.jpeg.assign(req.body.begin(), req.body.end());
       frameState_.width = width;
       frameState_.height = height;
       frameState_.frameCount += 1;
-      frameState_.lastFrameTickMs = NowMs();
+      frameState_.lastV1FrameTickMs = nowMs;
+      frameState_.lastFrameTickMs = nowMs;
     }
 
     return Json(200, R"({"ok":true})");
@@ -1459,15 +1480,21 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
     std::vector<uint8_t> bgra;
     uint32_t width = 0;
     uint32_t height = 0;
+    uint64_t lastDecodedMs = 0;
     {
       std::lock_guard<std::mutex> lock(frameMutex_);
       bgra = frameState_.v2Bgra;
       width = frameState_.v2Width;
       height = frameState_.v2Height;
+      lastDecodedMs = frameState_.lastV2DecodedTickMs;
     }
 
     if (bgra.empty() || width == 0 || height == 0) {
       return Json(404, R"({"error":"no_frame"})");
+    }
+    const uint64_t nowMs = NowMs();
+    if (lastDecodedMs == 0 || (nowMs - lastDecodedMs) > 1000) {
+      return Json(404, R"({"error":"stale_frame"})");
     }
 
     std::vector<uint8_t> body;
@@ -1637,6 +1664,9 @@ void ReceiverServer::ProcessV2MediaPacket(const uint8_t* packet, size_t packetSi
   if (streamType == 1) {
     const uint8_t* bitstream = packet + 24;
     size_t bitstreamSize = payloadSize;
+    if (LooksLikeAvcDecoderConfigurationRecord(bitstream, bitstreamSize)) {
+      return;
+    }
     std::vector<uint8_t> annexB;
     if (!HasAnnexBStartCode(bitstream, bitstreamSize)) {
       if (ConvertAvccToAnnexB(bitstream, bitstreamSize, &annexB)) {
@@ -1660,12 +1690,76 @@ void ReceiverServer::ProcessV2MediaPacket(const uint8_t* packet, size_t packetSi
       frameState_.v2Keyframes += 1;
     }
     if (!decodedBgra.empty() && decodedW > 0 && decodedH > 0) {
+      const uint64_t nowMs = NowMs();
       frameState_.v2Bgra = std::move(decodedBgra);
       frameState_.v2Width = decodedW;
       frameState_.v2Height = decodedH;
       frameState_.v2DecodedFrames += 1;
+      frameState_.lastV2DecodedTickMs = nowMs;
+      frameState_.lastFrameTickMs = nowMs;
     }
-    frameState_.lastFrameTickMs = NowMs();
+  } else if (streamType == 2) {
+    std::lock_guard<std::mutex> lock(frameMutex_);
+    frameState_.v2AudioFrames += 1;
+    frameState_.v2AudioBytes += payloadSize;
+  }
+}
+
+void ReceiverServer::ProcessUsbV2MediaPacket(const uint8_t* packet, size_t packetSize) {
+  if (packet == nullptr || packetSize < 24) {
+    return;
+  }
+
+  const uint8_t version = packet[0];
+  const uint8_t streamType = packet[1];
+  const uint8_t codec = packet[2];
+  const uint8_t flags = packet[3];
+  (void)version;
+  (void)codec;
+
+  const uint32_t payloadSize = ReadLE32(packet + 20);
+  const size_t actualPayload = packetSize - 24;
+  if (payloadSize > actualPayload) {
+    return;
+  }
+
+  if (streamType == 1) {
+    const uint8_t* bitstream = packet + 24;
+    size_t bitstreamSize = payloadSize;
+    if (LooksLikeAvcDecoderConfigurationRecord(bitstream, bitstreamSize)) {
+      return;
+    }
+    std::vector<uint8_t> annexB;
+    if (!HasAnnexBStartCode(bitstream, bitstreamSize)) {
+      if (ConvertAvccToAnnexB(bitstream, bitstreamSize, &annexB)) {
+        bitstream = annexB.data();
+        bitstreamSize = annexB.size();
+      }
+    }
+
+    std::vector<uint8_t> decodedBgra;
+    uint32_t decodedW = 0;
+    uint32_t decodedH = 0;
+    {
+      std::lock_guard<std::mutex> decLock(gDecoderMutex);
+      gH264Decoder.DecodeAnnexB(bitstream, bitstreamSize, &decodedBgra, &decodedW, &decodedH);
+    }
+
+    std::lock_guard<std::mutex> lock(frameMutex_);
+    frameState_.v2VideoFrames += 1;
+    frameState_.v2VideoBytes += payloadSize;
+    if ((flags & 0x01) != 0) {
+      frameState_.v2Keyframes += 1;
+    }
+    if (!decodedBgra.empty() && decodedW > 0 && decodedH > 0) {
+      const uint64_t nowMs = NowMs();
+      frameState_.v2Bgra = std::move(decodedBgra);
+      frameState_.v2Width = decodedW;
+      frameState_.v2Height = decodedH;
+      frameState_.v2DecodedFrames += 1;
+      frameState_.lastV2DecodedTickMs = nowMs;
+      frameState_.lastFrameTickMs = nowMs;
+    }
   } else if (streamType == 2) {
     std::lock_guard<std::mutex> lock(frameMutex_);
     frameState_.v2AudioFrames += 1;
