@@ -87,6 +87,7 @@ class ReceiverServer {
   std::string HandleRequest(const std::string& request);
   static uint64_t NowMs();
   bool HandleWebSocketV2(uintptr_t clientSocket, const std::string& rawRequest);
+  void ProcessV2MediaPacket(const uint8_t* packet, size_t packetSize);
 };
 
 }  // namespace acb::receiver

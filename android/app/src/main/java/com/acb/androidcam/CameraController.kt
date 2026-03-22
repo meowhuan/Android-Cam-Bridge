@@ -35,12 +35,14 @@ class CameraController(
     private val context: Context,
     private val lifecycleOwner: LifecycleOwner,
     private val previewView: PreviewView?,
+    private val onDebugEvent: ((String) -> Unit)? = null,
 ) {
     enum class TransportMode { LAN, USB_ADB, USB_NATIVE }
 
     private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val uploadExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val audioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val sessionExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val running = AtomicBoolean(false)
     private val micRunning = AtomicBoolean(false)
 
@@ -48,7 +50,7 @@ class CameraController(
     private var currentReceiver = "127.0.0.1:39393"
     private var targetWidth = 1280
     private var targetHeight = 720
-    private val v2Client = V2MediaClient()
+    private val v2Client = V2MediaClient { onDebugEvent?.invoke(it) }
     private var videoEncoder: VideoAvcEncoder? = null
     private var audioEncoder: AudioAacEncoder? = null
     private var lastStartAtMs = 0L
@@ -66,11 +68,17 @@ class CameraController(
         running.set(true)
 
         currentMode = transport
-        currentReceiver = receiverAddress.ifBlank { "127.0.0.1:39393" }
+        currentReceiver = when {
+            receiverAddress.isNotBlank() -> receiverAddress
+            transport == TransportMode.USB_NATIVE -> ""
+            else -> "127.0.0.1:39393"
+        }
         targetWidth = width
         targetHeight = height
 
-        Log.i("ACB", "start transport=$transport receiver=$currentReceiver ${width}x$height@$fps bitrate=$bitrate mic=$pushMic")
+        val startLine = "start transport=$transport receiver=$currentReceiver ${width}x$height@$fps bitrate=$bitrate mic=$pushMic"
+        Log.i("ACB", startLine)
+        onDebugEvent?.invoke(startLine)
         lastStartAtMs = System.currentTimeMillis()
 
         val transportName = when (transport) {
@@ -78,11 +86,21 @@ class CameraController(
             TransportMode.USB_NATIVE -> "usb-native"
             TransportMode.USB_ADB -> "usb-adb"
         }
-        val v2Session = v2Client.startSession(currentReceiver, transportName)
-        if (v2Session != null) {
-            v2Client.connect(v2Session.wsUrl)
-            videoEncoder = VideoAvcEncoder(width, height, bitrate, fps)
-            audioEncoder = AudioAacEncoder(sampleRate = 48_000, channels = 1, bitrate = 96_000)
+        sessionExecutor.execute {
+            val v2Session = v2Client.startSession(currentReceiver, transportName)
+            if (!running.get()) return@execute
+            if (v2Session != null) {
+                v2Client.connect(v2Session.wsUrl)
+                videoEncoder = VideoAvcEncoder(width, height, bitrate, fps)
+                audioEncoder = AudioAacEncoder(sampleRate = 48_000, channels = 1, bitrate = 96_000)
+                val line = "v2 session connected transport=$transportName receiver=$currentReceiver"
+                Log.i("ACB", line)
+                onDebugEvent?.invoke(line)
+            } else {
+                val line = "v2 session start failed transport=$transportName receiver=$currentReceiver"
+                Log.w("ACB", line)
+                onDebugEvent?.invoke(line)
+            }
         }
 
         val providerFuture = ProcessCameraProvider.getInstance(context)

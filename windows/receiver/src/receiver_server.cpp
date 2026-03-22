@@ -200,6 +200,63 @@ std::string JsonEscape(const std::string& s) {
   return out;
 }
 
+std::string JsonUnescape(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  bool escaped = false;
+  for (size_t i = 0; i < s.size(); ++i) {
+    const char c = s[i];
+    if (!escaped) {
+      if (c == '\\') {
+        escaped = true;
+      } else {
+        out.push_back(c);
+      }
+      continue;
+    }
+
+    switch (c) {
+      case '\\':
+        out.push_back('\\');
+        break;
+      case '"':
+        out.push_back('"');
+        break;
+      case '/':
+        out.push_back('/');
+        break;
+      case 'b':
+        out.push_back('\b');
+        break;
+      case 'f':
+        out.push_back('\f');
+        break;
+      case 'n':
+        out.push_back('\n');
+        break;
+      case 'r':
+        out.push_back('\r');
+        break;
+      case 't':
+        out.push_back('\t');
+        break;
+      case 'u':
+        // Keep as-is for unsupported unicode escape.
+        out.push_back('\\');
+        out.push_back('u');
+        break;
+      default:
+        out.push_back(c);
+        break;
+    }
+    escaped = false;
+  }
+  if (escaped) {
+    out.push_back('\\');
+  }
+  return out;
+}
+
 std::string JsonField(const std::string& body, const std::string& key, const std::string& fallback) {
   const std::string token = "\"" + key + "\"";
   const auto keyPos = body.find(token);
@@ -218,7 +275,58 @@ std::string JsonField(const std::string& body, const std::string& key, const std
   if (q2 == std::string::npos) {
     return fallback;
   }
-  return body.substr(q1 + 1, q2 - q1 - 1);
+  return JsonUnescape(body.substr(q1 + 1, q2 - q1 - 1));
+}
+
+std::vector<uint8_t> Base64Decode(const std::string& input) {
+  if (input.empty()) return {};
+  DWORD outLen = 0;
+  if (!CryptStringToBinaryA(input.c_str(),
+                            static_cast<DWORD>(input.size()),
+                            CRYPT_STRING_BASE64,
+                            nullptr,
+                            &outLen,
+                            nullptr,
+                            nullptr)) {
+    return {};
+  }
+  std::vector<uint8_t> out(outLen, 0);
+  if (!CryptStringToBinaryA(input.c_str(),
+                            static_cast<DWORD>(input.size()),
+                            CRYPT_STRING_BASE64,
+                            out.data(),
+                            &outLen,
+                            nullptr,
+                            nullptr)) {
+    return {};
+  }
+  out.resize(outLen);
+  return out;
+}
+
+std::string ResolveWsHostPort(const ParsedRequest& req, uint16_t defaultPort) {
+  auto it = req.headers.find("host");
+  if (it == req.headers.end() || Trim(it->second).empty()) {
+    return "127.0.0.1:" + std::to_string(defaultPort);
+  }
+
+  std::string host = Trim(it->second);
+  // Strip potential scheme/prefix by defensive handling.
+  const auto schemePos = host.find("://");
+  if (schemePos != std::string::npos) {
+    host = host.substr(schemePos + 3);
+  }
+  const auto slashPos = host.find('/');
+  if (slashPos != std::string::npos) {
+    host = host.substr(0, slashPos);
+  }
+  if (host.empty()) {
+    return "127.0.0.1:" + std::to_string(defaultPort);
+  }
+  if (host.find(':') == std::string::npos) {
+    host += ":" + std::to_string(defaultPort);
+  }
+  return host;
 }
 
 uint32_t JsonFieldUInt(const std::string& body, const std::string& key, uint32_t fallback) {
@@ -424,6 +532,47 @@ uint32_t ReadLE32(const uint8_t* p) {
          (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
 }
 
+bool HasAnnexBStartCode(const uint8_t* data, size_t size) {
+  if (data == nullptr || size < 4) return false;
+  const size_t scan = std::min<size_t>(size, 64);
+  for (size_t i = 0; i + 3 < scan; ++i) {
+    if (data[i] == 0x00 && data[i + 1] == 0x00 &&
+        ((data[i + 2] == 0x01) || (data[i + 2] == 0x00 && data[i + 3] == 0x01))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ConvertAvccToAnnexB(const uint8_t* data, size_t size, std::vector<uint8_t>* out) {
+  if (data == nullptr || out == nullptr || size < 5) return false;
+  out->clear();
+  out->reserve(size + 128);
+
+  size_t off = 0;
+  while (off + 4 <= size) {
+    const uint32_t naluLen = (static_cast<uint32_t>(data[off]) << 24) |
+                             (static_cast<uint32_t>(data[off + 1]) << 16) |
+                             (static_cast<uint32_t>(data[off + 2]) << 8) |
+                             static_cast<uint32_t>(data[off + 3]);
+    off += 4;
+    if (naluLen == 0) {
+      continue;
+    }
+    if (off + naluLen > size) {
+      out->clear();
+      return false;
+    }
+    out->push_back(0x00);
+    out->push_back(0x00);
+    out->push_back(0x00);
+    out->push_back(0x01);
+    out->insert(out->end(), data + off, data + off + naluLen);
+    off += naluLen;
+  }
+  return !out->empty();
+}
+
 template <typename T>
 void SafeRelease(T** p) {
   if (p && *p) {
@@ -438,16 +587,23 @@ inline uint8_t ClampU8(int v) {
   return static_cast<uint8_t>(v);
 }
 
-void NV12ToBGRA(const uint8_t* nv12, uint32_t width, uint32_t height, std::vector<uint8_t>* outBgra) {
-  const size_t yPlaneSize = static_cast<size_t>(width) * static_cast<size_t>(height);
+void NV12ToBGRA(const uint8_t* nv12,
+                uint32_t width,
+                uint32_t height,
+                int yStride,
+                int uvStride,
+                std::vector<uint8_t>* outBgra) {
+  if (yStride <= 0) yStride = static_cast<int>(width);
+  if (uvStride <= 0) uvStride = yStride;
   const uint8_t* yPlane = nv12;
-  const uint8_t* uvPlane = nv12 + yPlaneSize;
+  const uint8_t* uvPlane = nv12 + static_cast<size_t>(yStride) * static_cast<size_t>(height);
+  const size_t yPlaneSize = static_cast<size_t>(width) * static_cast<size_t>(height);
   outBgra->resize(yPlaneSize * 4);
 
   for (uint32_t y = 0; y < height; ++y) {
     for (uint32_t x = 0; x < width; ++x) {
-      const int yv = static_cast<int>(yPlane[y * width + x]);
-      const size_t uvIndex = static_cast<size_t>((y / 2) * width + (x & ~1U));
+      const int yv = static_cast<int>(yPlane[static_cast<size_t>(y) * yStride + x]);
+      const size_t uvIndex = static_cast<size_t>(y / 2) * static_cast<size_t>(uvStride) + (x & ~1U);
       const int u = static_cast<int>(uvPlane[uvIndex + 0]) - 128;
       const int v = static_cast<int>(uvPlane[uvIndex + 1]) - 128;
 
@@ -560,18 +716,39 @@ class H264MftDecoder {
       IMFSample* produced = outData.pSample;
       IMFMediaBuffer* contiguous = nullptr;
       if (produced && SUCCEEDED(produced->ConvertToContiguousBuffer(&contiguous))) {
-        BYTE* src = nullptr;
-        DWORD srcMax = 0;
-        DWORD srcLen = 0;
-        if (SUCCEEDED(contiguous->Lock(&src, &srcMax, &srcLen))) {
-          if (width_ > 0 && height_ > 0 && srcLen >= width_ * height_ * 3 / 2) {
-            NV12ToBGRA(src, width_, height_, outBgra);
+        IMF2DBuffer* buffer2d = nullptr;
+        BYTE* scan0 = nullptr;
+        LONG stride = 0;
+        bool converted = false;
+
+        if (SUCCEEDED(contiguous->QueryInterface(IID_PPV_ARGS(&buffer2d))) &&
+            SUCCEEDED(buffer2d->Lock2D(&scan0, &stride))) {
+          if (width_ > 0 && height_ > 0) {
+            NV12ToBGRA(scan0, width_, height_, static_cast<int>(stride), static_cast<int>(stride), outBgra);
             *outW = width_;
             *outH = height_;
             gotFrame = true;
+            converted = true;
           }
-          contiguous->Unlock();
+          buffer2d->Unlock2D();
         }
+
+        if (!converted) {
+          BYTE* src = nullptr;
+          DWORD srcMax = 0;
+          DWORD srcLen = 0;
+          if (SUCCEEDED(contiguous->Lock(&src, &srcMax, &srcLen))) {
+            if (width_ > 0 && height_ > 0 && srcLen >= width_ * height_ * 3 / 2) {
+              NV12ToBGRA(src, width_, height_, static_cast<int>(width_), static_cast<int>(width_), outBgra);
+              *outW = width_;
+              *outH = height_;
+              gotFrame = true;
+            }
+            contiguous->Unlock();
+          }
+        }
+
+        SafeRelease(&buffer2d);
       }
       SafeRelease(&contiguous);
       if (outData.pEvents) outData.pEvents->Release();
@@ -885,46 +1062,7 @@ bool ReceiverServer::HandleWebSocketV2(uintptr_t clientSocket, const std::string
       continue;
     }
 
-    const uint8_t version = payload[0];
-    const uint8_t streamType = payload[1];
-    const uint8_t codec = payload[2];
-    const uint8_t flags = payload[3];
-    (void)version;
-    (void)codec;
-
-    const uint32_t payloadSize = ReadLE32(payload.data() + 20);
-    const size_t actualPayload = payload.size() - 24;
-    if (payloadSize > actualPayload) {
-      continue;
-    }
-
-    if (streamType == 1) {
-      std::vector<uint8_t> decodedBgra;
-      uint32_t decodedW = 0;
-      uint32_t decodedH = 0;
-      {
-        std::lock_guard<std::mutex> decLock(gDecoderMutex);
-        gH264Decoder.DecodeAnnexB(payload.data() + 24, payloadSize, &decodedBgra, &decodedW, &decodedH);
-      }
-
-      std::lock_guard<std::mutex> lock(frameMutex_);
-      frameState_.v2VideoFrames += 1;
-      frameState_.v2VideoBytes += payloadSize;
-      if ((flags & 0x01) != 0) {
-        frameState_.v2Keyframes += 1;
-      }
-      if (!decodedBgra.empty() && decodedW > 0 && decodedH > 0) {
-        frameState_.v2Bgra = std::move(decodedBgra);
-        frameState_.v2Width = decodedW;
-        frameState_.v2Height = decodedH;
-        frameState_.v2DecodedFrames += 1;
-      }
-      frameState_.lastFrameTickMs = NowMs();
-    } else if (streamType == 2) {
-      std::lock_guard<std::mutex> lock(frameMutex_);
-      frameState_.v2AudioFrames += 1;
-      frameState_.v2AudioBytes += payloadSize;
-    }
+    ProcessV2MediaPacket(payload.data(), payload.size());
   }
 
   return true;
@@ -1072,6 +1210,7 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
     const std::string linkId = JsonField(req.body, "linkId", "");
     const uint32_t seq = JsonFieldUInt(req.body, "seq", 0);
     const uint32_t size = JsonFieldUInt(req.body, "size", 0);
+    const std::string payloadBase64 = JsonField(req.body, "payload", "");
     if (linkId.empty()) {
       return Json(400, R"({"error":"missing_link_id"})");
     }
@@ -1100,6 +1239,16 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
       rxPackets = usbLinkRxPackets_;
       rxBytes = usbLinkRxBytes_;
       expectedSeq = usbLinkExpectedSeq_;
+    }
+
+    if (!payloadBase64.empty()) {
+      const auto packet = Base64Decode(payloadBase64);
+      if (!packet.empty()) {
+        ProcessV2MediaPacket(packet.data(), packet.size());
+      } else {
+        std::lock_guard<std::mutex> lock(usbLinkMutex_);
+        usbLinkLastError_ = "invalid_payload_base64";
+      }
     }
 
     std::ostringstream body;
@@ -1196,10 +1345,11 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
     activeTransport_ = transport;
     activeSessionId_ = "sess_v2_" + std::to_string(NowMs());
     activeAuthToken_ = "tok_" + std::to_string(NowMs() + 17);
+    const std::string wsHostPort = ResolveWsHostPort(req, port_);
 
     std::ostringstream body;
     body << "{\"sessionId\":\"" << JsonEscape(activeSessionId_)
-         << "\",\"wsUrl\":\"ws://127.0.0.1:39393/ws/v2/media?sessionId=" << JsonEscape(activeSessionId_)
+         << "\",\"wsUrl\":\"ws://" << JsonEscape(wsHostPort) << "/ws/v2/media?sessionId=" << JsonEscape(activeSessionId_)
          << "\",\"authToken\":\"" << JsonEscape(activeAuthToken_)
          << "\",\"recommendedAspect\":\"16:9\"";
     if (transport == "usb-native") {
@@ -1464,6 +1614,63 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
   }
 
   return Json(404, R"({"error":"not_found"})");
+}
+
+void ReceiverServer::ProcessV2MediaPacket(const uint8_t* packet, size_t packetSize) {
+  if (packet == nullptr || packetSize < 24) {
+    return;
+  }
+
+  const uint8_t version = packet[0];
+  const uint8_t streamType = packet[1];
+  const uint8_t codec = packet[2];
+  const uint8_t flags = packet[3];
+  (void)version;
+  (void)codec;
+
+  const uint32_t payloadSize = ReadLE32(packet + 20);
+  const size_t actualPayload = packetSize - 24;
+  if (payloadSize > actualPayload) {
+    return;
+  }
+
+  if (streamType == 1) {
+    const uint8_t* bitstream = packet + 24;
+    size_t bitstreamSize = payloadSize;
+    std::vector<uint8_t> annexB;
+    if (!HasAnnexBStartCode(bitstream, bitstreamSize)) {
+      if (ConvertAvccToAnnexB(bitstream, bitstreamSize, &annexB)) {
+        bitstream = annexB.data();
+        bitstreamSize = annexB.size();
+      }
+    }
+
+    std::vector<uint8_t> decodedBgra;
+    uint32_t decodedW = 0;
+    uint32_t decodedH = 0;
+    {
+      std::lock_guard<std::mutex> decLock(gDecoderMutex);
+      gH264Decoder.DecodeAnnexB(bitstream, bitstreamSize, &decodedBgra, &decodedW, &decodedH);
+    }
+
+    std::lock_guard<std::mutex> lock(frameMutex_);
+    frameState_.v2VideoFrames += 1;
+    frameState_.v2VideoBytes += payloadSize;
+    if ((flags & 0x01) != 0) {
+      frameState_.v2Keyframes += 1;
+    }
+    if (!decodedBgra.empty() && decodedW > 0 && decodedH > 0) {
+      frameState_.v2Bgra = std::move(decodedBgra);
+      frameState_.v2Width = decodedW;
+      frameState_.v2Height = decodedH;
+      frameState_.v2DecodedFrames += 1;
+    }
+    frameState_.lastFrameTickMs = NowMs();
+  } else if (streamType == 2) {
+    std::lock_guard<std::mutex> lock(frameMutex_);
+    frameState_.v2AudioFrames += 1;
+    frameState_.v2AudioBytes += payloadSize;
+  }
 }
 
 void ReceiverServer::AcceptLoop() {

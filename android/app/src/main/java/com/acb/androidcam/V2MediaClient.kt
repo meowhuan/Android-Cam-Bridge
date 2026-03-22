@@ -1,6 +1,7 @@
 package com.acb.androidcam
 
 import android.util.Log
+import android.util.Base64
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -10,22 +11,49 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import org.json.JSONObject
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorCompletionService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-class V2MediaClient {
+class V2MediaClient(
+    private val onDebugEvent: ((String) -> Unit)? = null,
+) {
+    private fun emit(msg: String) {
+        onDebugEvent?.invoke(msg)
+        Log.i("ACB", msg)
+    }
     private val http = OkHttpClient.Builder()
         .connectTimeout(2, TimeUnit.SECONDS)
         .readTimeout(2, TimeUnit.SECONDS)
+        .build()
+    private val usbPacketHttp = OkHttpClient.Builder()
+        .connectTimeout(2, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .writeTimeout(8, TimeUnit.SECONDS)
+        .build()
+    private val scanHttp = OkHttpClient.Builder()
+        .connectTimeout(220, TimeUnit.MILLISECONDS)
+        .readTimeout(220, TimeUnit.MILLISECONDS)
+        .writeTimeout(220, TimeUnit.MILLISECONDS)
         .build()
 
     private var ws: WebSocket? = null
     private val connected = AtomicBoolean(false)
     private val frameIndex = AtomicLong(0)
     private val lastConnectedAtMs = AtomicLong(0)
+    private var activeTransport = "lan"
+    private var receiverAddress = "127.0.0.1:39393"
+    private var sessionId = ""
+    private var usbNativeLinkId = ""
+    private val usbSeq = AtomicLong(0)
+    private val usbPacketCount = AtomicLong(0)
 
     data class SessionInfo(
         val sessionId: String,
@@ -34,6 +62,32 @@ class V2MediaClient {
     )
 
     fun startSession(receiverAddress: String, transport: String): SessionInfo? {
+        this.activeTransport = transport
+        val initial = normalizeReceiverAddress(receiverAddress)
+        this.receiverAddress = initial
+
+        val first = startSessionOnce(initial, transport)
+        if (first != null) return first
+
+        if (transport != "usb-native") {
+            return null
+        }
+
+        val candidates = usbNativeCandidates(initial)
+        emit("usb-native scanning candidates=${candidates.size} (192.168.x.x)")
+        val reachable = findReachableReceiver(candidates.filter { it != initial })
+        if (reachable != null) {
+            val s = startSessionOnce(reachable, transport)
+            if (s != null) {
+                this.receiverAddress = reachable
+                emit("usb-native receiver auto-detected: $reachable")
+                return s
+            }
+        }
+        return null
+    }
+
+    private fun startSessionOnce(targetAddress: String, transport: String): SessionInfo? {
         return try {
             val body = JSONObject()
                 .put("transport", transport)
@@ -43,7 +97,7 @@ class V2MediaClient {
                 .toString()
 
             val req = Request.Builder()
-                .url("http://$receiverAddress/api/v2/session/start")
+                .url("http://$targetAddress/api/v2/session/start")
                 .post(body.toRequestBody("application/json".toMediaType()))
                 .build()
 
@@ -51,22 +105,128 @@ class V2MediaClient {
                 if (!resp.isSuccessful) return null
                 val text = resp.body?.string() ?: return null
                 val obj = JSONObject(text)
+                sessionId = obj.optString("sessionId")
                 SessionInfo(
-                    sessionId = obj.optString("sessionId"),
+                    sessionId = sessionId,
                     wsUrl = obj.optString("wsUrl"),
                     authToken = obj.optString("authToken"),
                 )
             }
         } catch (t: Throwable) {
             Log.w("ACB", "v2 start session failed: ${t.message}")
+            onDebugEvent?.invoke("v2 start session failed: ${t.message}")
             null
         }
     }
 
+    private fun normalizeReceiverAddress(input: String): String {
+        val value = input.trim()
+        if (value.isBlank()) return "192.168.42.129:39393"
+        return if (value.contains(":")) value else "$value:39393"
+    }
+
+    private fun usbNativeCandidates(primary: String): List<String> {
+        val out = linkedSetOf<String>()
+        val (host, port) = splitHostPort(primary)
+        out += primary
+        if (host.startsWith("192.168.")) {
+            val parts = host.split('.')
+            if (parts.size == 4) {
+                val third = parts[2]
+                for (i in 1..254) out += "192.168.$third.$i:$port"
+            }
+        }
+        for (i in 1..254) out += "192.168.42.$i:$port"
+        for (i in 1..254) out += "192.168.137.$i:$port"
+
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val nif = interfaces.nextElement()
+                if (!nif.isUp || nif.isLoopback) continue
+                val addrs = nif.inetAddresses
+                while (addrs.hasMoreElements()) {
+                    val addr = addrs.nextElement()
+                    if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                        val host = addr.hostAddress ?: continue
+                        val parts = host.split('.')
+                        if (parts.size != 4) continue
+                        if (parts[0] == "192" && parts[1] == "168") {
+                            val third = parts[2]
+                            for (i in 1..254) out += "192.168.$third.$i:$port"
+                        }
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+        }
+        return out.toList()
+    }
+
+    private fun splitHostPort(address: String): Pair<String, String> {
+        val value = address.trim()
+        if (value.isBlank()) return "192.168.42.129" to "39393"
+        val idx = value.lastIndexOf(':')
+        if (idx <= 0 || idx == value.length - 1) return value to "39393"
+        return value.substring(0, idx) to value.substring(idx + 1)
+    }
+
+    private fun probeReceiver(address: String): Boolean {
+        return try {
+            val req = Request.Builder()
+                .url("http://$address/api/v1/devices")
+                .get()
+                .build()
+            scanHttp.newCall(req).execute().use { resp -> resp.isSuccessful }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun findReachableReceiver(candidates: List<String>): String? {
+        if (candidates.isEmpty()) return null
+        val pool = Executors.newFixedThreadPool(24)
+        val ecs = ExecutorCompletionService<String?>(pool)
+        try {
+            for (candidate in candidates) {
+                ecs.submit(Callable<String?> {
+                    if (probeReceiver(candidate)) candidate else null
+                })
+            }
+            repeat(candidates.size) {
+                val hit = ecs.take().get()
+                if (!hit.isNullOrBlank()) {
+                    return hit
+                }
+            }
+            return null
+        } finally {
+            pool.shutdownNow()
+        }
+    }
+
     fun connect(wsUrl: String) {
-        if (wsUrl.isBlank()) return
         ws?.cancel()
         connected.set(false)
+        usbNativeLinkId = ""
+        usbSeq.set(0)
+        usbPacketCount.set(0)
+
+        if (activeTransport == "usb-native") {
+            val ok = startUsbNativeLink()
+            connected.set(ok)
+            if (ok) {
+                lastConnectedAtMs.set(System.currentTimeMillis())
+                emit("usb-native link connected receiver=$receiverAddress sessionId=$sessionId linkId=$usbNativeLinkId")
+                sendUsbNativeProbePacket()
+            } else {
+                Log.w("ACB", "usb-native link handshake failed")
+                onDebugEvent?.invoke("usb-native link handshake failed")
+            }
+            return
+        }
+
+        if (wsUrl.isBlank()) return
         val req = Request.Builder().url(wsUrl).build()
         ws = http.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -117,7 +277,90 @@ class V2MediaClient {
         val packet = ByteArray(24 + payload.size)
         System.arraycopy(header.array(), 0, packet, 0, 24)
         System.arraycopy(payload, 0, packet, 24, payload.size)
-        ws?.send(ByteString.of(*packet))
+        if (activeTransport == "usb-native") {
+            sendUsbNativePacket(packet)
+        } else {
+            ws?.send(ByteString.of(*packet))
+        }
+    }
+
+    private fun startUsbNativeLink(): Boolean {
+        if (sessionId.isBlank()) return false
+        return try {
+            val body = JSONObject()
+                .put("sessionId", sessionId)
+                .put("devicePath", "android-usb-native")
+                .put("mtu", 65536)
+                .toString()
+            val req = Request.Builder()
+                .url("http://$receiverAddress/api/v2/usb-native/handshake")
+                .post(body.toRequestBody("application/json".toMediaType()))
+                .build()
+            http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return false
+                val text = resp.body?.string() ?: return false
+                val obj = JSONObject(text)
+                usbNativeLinkId = obj.optString("linkId")
+                usbNativeLinkId.isNotBlank()
+            }
+        } catch (t: Throwable) {
+            Log.w("ACB", "usb-native handshake failed: ${t.message}")
+            onDebugEvent?.invoke("usb-native handshake failed: ${t.message}")
+            false
+        }
+    }
+
+    private fun sendUsbNativePacket(packet: ByteArray) {
+        if (!connected.get() || usbNativeLinkId.isBlank()) return
+        val seq = usbSeq.getAndIncrement()
+        val count = usbPacketCount.incrementAndGet()
+        val body = JSONObject()
+            .put("linkId", usbNativeLinkId)
+            .put("seq", seq)
+            .put("size", packet.size)
+            .put("payload", Base64.encodeToString(packet, Base64.NO_WRAP))
+            .toString()
+        try {
+            val req = Request.Builder()
+                .url("http://$receiverAddress/api/v2/usb-native/packet")
+                .post(body.toRequestBody("application/json".toMediaType()))
+                .build()
+            usbPacketHttp.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    val msg = resp.body?.string()?.take(200) ?: ""
+                    Log.w("ACB", "usb-native packet failed http=${resp.code} seq=$seq size=${packet.size} body=$msg")
+                    onDebugEvent?.invoke("usb-native packet failed http=${resp.code} seq=$seq size=${packet.size}")
+                } else if (count % 60L == 0L) {
+                    emit("usb-native packet sent count=$count seq=$seq size=${packet.size}")
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w("ACB", "usb-native packet send failed seq=$seq size=${packet.size}: ${t.message}")
+            onDebugEvent?.invoke("usb-native packet send failed seq=$seq size=${packet.size}: ${t.message}")
+        }
+    }
+
+    private fun sendUsbNativeProbePacket() {
+        if (!connected.get() || usbNativeLinkId.isBlank()) return
+        val seq = usbSeq.getAndIncrement()
+        val body = JSONObject()
+            .put("linkId", usbNativeLinkId)
+            .put("seq", seq)
+            .put("size", 0)
+            .toString()
+        try {
+            val req = Request.Builder()
+                .url("http://$receiverAddress/api/v2/usb-native/packet")
+                .post(body.toRequestBody("application/json".toMediaType()))
+                .build()
+            usbPacketHttp.newCall(req).execute().use { resp ->
+                val text = resp.body?.string() ?: ""
+                emit("usb-native probe http=${resp.code} resp=$text")
+            }
+        } catch (t: Throwable) {
+            Log.w("ACB", "usb-native probe failed: ${t.message}")
+            onDebugEvent?.invoke("usb-native probe failed: ${t.message}")
+        }
     }
 
     fun close() {
