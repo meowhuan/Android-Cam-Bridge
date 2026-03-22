@@ -169,9 +169,11 @@ jobs:
         shell: pwsh
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PRIVATE_KEY_B64: ${{ secrets.GPG_PRIVATE_KEY_B64 }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          $enabled = -not [string]::IsNullOrWhiteSpace($env:GPG_PRIVATE_KEY) -and -not [string]::IsNullOrWhiteSpace($env:GPG_PASSPHRASE)
+          $hasKey = -not [string]::IsNullOrWhiteSpace($env:GPG_PRIVATE_KEY) -or -not [string]::IsNullOrWhiteSpace($env:GPG_PRIVATE_KEY_B64)
+          $enabled = $hasKey -and -not [string]::IsNullOrWhiteSpace($env:GPG_PASSPHRASE)
           if ($enabled) {
             "enabled=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
             Write-Host "GPG signing enabled."
@@ -186,9 +188,17 @@ jobs:
         shell: pwsh
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PRIVATE_KEY_B64: ${{ secrets.GPG_PRIVATE_KEY_B64 }}
         run: |
           $keyFile = Join-Path $env:RUNNER_TEMP "acb-signing.key.asc"
-          Set-Content -Path $keyFile -Value $env:GPG_PRIVATE_KEY -Encoding utf8
+
+          if (-not [string]::IsNullOrWhiteSpace($env:GPG_PRIVATE_KEY_B64)) {
+            $decoded = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($env:GPG_PRIVATE_KEY_B64))
+            Set-Content -Path $keyFile -Value $decoded -Encoding utf8
+          } else {
+            Set-Content -Path $keyFile -Value $env:GPG_PRIVATE_KEY -Encoding utf8
+          }
+
           gpg --batch --import $keyFile
 
           $secretKeyLines = gpg --batch --list-secret-keys --with-colons

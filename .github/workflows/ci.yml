@@ -12,6 +12,7 @@ permissions:
 jobs:
   windows-build:
     runs-on: windows-2022
+    environment: release
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,6 +45,10 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.10.2"
+
+      - name: Check GPG Secret Keys (debug)
+        shell: pwsh
+        run: gpg --batch --list-secret-keys
 
       - name: Build OBS SDK (official script)
         shell: pwsh
