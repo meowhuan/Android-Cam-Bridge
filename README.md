@@ -15,7 +15,7 @@
 | Receiver | `windows/receiver/` | 会话控制、帧接收、v2 H.264 解码、统计接口 | 可用 |
 | OBS Plugin | `windows/obs-plugin/` | 在 OBS 中提供 `android_cam_source` 源 | 可用 |
 | WinUI GUI | `windows/gui/Acb.Gui/` | Receiver 地址配置、会话管理、统计与日志 | 可用 |
-| VirtualCam Bridge | `windows/virtualcam-bridge/` | 虚拟摄像头桥接实验入口 | 预留/实验 |
+| VirtualCam Bridge | `windows/virtualcam-bridge/` | 虚拟摄像头桥接实验入口 | 实验 |
 | Protocol Docs | `protocol/` | 信令、v2 媒体帧格式说明 | 可用 |
 | Installer | `installer/` + `scripts/` | Payload 打包、Inno Setup 安装器 | 可用 |
 | CI/Release | `.github/workflows/` | CI 构建 + Tag 发布资产 | 可用 |
