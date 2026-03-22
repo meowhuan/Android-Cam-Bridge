@@ -5,62 +5,148 @@
     Title="ACB Receiver">
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="2*" />
-            <ColumnDefinition Width="3*" />
+            <ColumnDefinition Width="430" />
+            <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
-        <StackPanel Grid.Column="0" Padding="20" Spacing="10">
-            <TextBlock x:Name="AppTitleText" Text="ACB Receiver" FontSize="26" FontWeight="SemiBold" />
-            <TextBlock x:Name="ConnectionTitleText" Text="Connection" FontSize="16" Opacity="0.8" />
-            <ComboBox x:Name="LanguageBox" SelectionChanged="OnLanguageChanged" SelectedIndex="0">
-                <ComboBoxItem Tag="auto" Content="Auto" />
-                <ComboBoxItem Tag="zh-CN" Content="简体中文" />
-                <ComboBoxItem Tag="en-US" Content="English" />
-            </ComboBox>
-            <TextBox x:Name="ReceiverAddressBox" Text="http://127.0.0.1:39393" PlaceholderText="receiver address" />
-            <ComboBox x:Name="ConnectionModeBox" SelectedIndex="0">
-                <ComboBoxItem x:Name="ConnectionModeManagedItem" Tag="managed" Content="managed" />
-                <ComboBoxItem x:Name="ConnectionModeAttachItem" Tag="attach" Content="attach" />
-            </ComboBox>
-            <Button x:Name="SetupAdbButton" Content="Setup ADB" Click="OnSetupAdb" />
-            <Button x:Name="RefreshDevicesButton" Content="Refresh Devices" Click="OnRefreshDevices" />
-            <ComboBox x:Name="TransportBox" SelectedIndex="0">
-                <ComboBoxItem x:Name="TransportUsbItem" Tag="usb-adb" Content="usb-adb" />
-                <ComboBoxItem x:Name="TransportLanItem" Tag="lan" Content="lan" />
-            </ComboBox>
-            <ComboBox x:Name="QualityPresetBox" SelectedIndex="0">
-                <ComboBoxItem x:Name="QualityBalancedItem" Tag="balanced" Content="balanced" />
-                <ComboBoxItem x:Name="QualityHighItem" Tag="high" Content="high" />
-                <ComboBoxItem x:Name="QualityUltraItem" Tag="ultra" Content="ultra" />
-            </ComboBox>
-            <ComboBox x:Name="FitModeBox" SelectedIndex="0">
-                <ComboBoxItem x:Name="FitLetterboxItem" Tag="letterbox" Content="letterbox" />
-                <ComboBoxItem x:Name="FitCropItem" Tag="crop" Content="crop" />
-                <ComboBoxItem x:Name="FitStretchItem" Tag="stretch" Content="stretch" />
-            </ComboBox>
-            <ComboBox x:Name="ResolutionBox" SelectedIndex="1">
-                <ComboBoxItem Content="640x480" />
-                <ComboBoxItem Content="1280x720" />
-                <ComboBoxItem Content="1920x1080" />
-            </ComboBox>
-            <ComboBox x:Name="FpsBox" SelectedIndex="1">
-                <ComboBoxItem Content="24" />
-                <ComboBoxItem Content="30" />
-                <ComboBoxItem Content="60" />
-            </ComboBox>
-            <TextBox x:Name="BitrateBox" Text="4000000" PlaceholderText="video bitrate bps" />
-            <CheckBox x:Name="AudioEnabledBox" IsChecked="True" Content="Audio Enabled" />
-            <CheckBox x:Name="AutoStopReceiverBox" IsChecked="True" Content="Stop managed receiver on exit" />
-            <Button x:Name="StartSessionButton" Content="Start v2 Session" Click="OnStartSession" />
-            <Button x:Name="StopSessionButton" Content="Stop v2 Session" Click="OnStopSession" />
-            <TextBox x:Name="SessionIdBox" PlaceholderText="session id" />
-            <Button x:Name="FetchStatsButton" Content="Fetch v2 Stats" Click="OnFetchStats" />
-            <Button x:Name="AutoRefreshButton" Content="Auto Refresh Stats (5s)" Click="OnToggleAutoRefreshStats" />
-        </StackPanel>
+        <ScrollViewer Grid.Column="0" Padding="20,20,12,20" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Spacing="10">
+                <TextBlock x:Name="AppTitleText" Text="ACB Receiver" FontSize="26" FontWeight="SemiBold" />
+                <TextBlock x:Name="ConnectionTitleText" Text="Connection" FontSize="16" Opacity="0.8" />
 
-        <StackPanel Grid.Column="1" Padding="20" Spacing="10">
+                <TextBlock x:Name="LanguageLabelText" Text="Language" Opacity="0.75" />
+                <ComboBox x:Name="LanguageBox" SelectionChanged="OnLanguageChanged" SelectedIndex="0">
+                    <ComboBoxItem Tag="auto" Content="Auto" />
+                    <ComboBoxItem Tag="zh-CN" Content="简体中文" />
+                    <ComboBoxItem Tag="en-US" Content="English" />
+                </ComboBox>
+
+                <TextBlock x:Name="ReceiverUrlLabelText" Text="Receiver URL" Opacity="0.75" />
+                <TextBox x:Name="ReceiverAddressBox" Text="http://127.0.0.1:39393" PlaceholderText="receiver address" />
+
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Spacing="6">
+                        <TextBlock x:Name="ConnectionModeLabelText" Text="Connection Mode" Opacity="0.75" />
+                        <ComboBox x:Name="ConnectionModeBox" SelectedIndex="0">
+                            <ComboBoxItem x:Name="ConnectionModeManagedItem" Tag="managed" Content="managed" />
+                            <ComboBoxItem x:Name="ConnectionModeAttachItem" Tag="attach" Content="attach" />
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Spacing="6">
+                        <TextBlock x:Name="TransportLabelText" Text="Transport" Opacity="0.75" />
+                        <ComboBox x:Name="TransportBox" SelectedIndex="0">
+                            <ComboBoxItem x:Name="TransportUsbItem" Tag="usb-adb" Content="usb-adb" />
+                            <ComboBoxItem x:Name="TransportLanItem" Tag="lan" Content="lan" />
+                        </ComboBox>
+                    </StackPanel>
+                </Grid>
+
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Spacing="6">
+                        <TextBlock x:Name="QualityLabelText" Text="Quality" Opacity="0.75" />
+                        <ComboBox x:Name="QualityPresetBox" SelectedIndex="0">
+                            <ComboBoxItem x:Name="QualityBalancedItem" Tag="balanced" Content="balanced" />
+                            <ComboBoxItem x:Name="QualityHighItem" Tag="high" Content="high" />
+                            <ComboBoxItem x:Name="QualityUltraItem" Tag="ultra" Content="ultra" />
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Spacing="6">
+                        <TextBlock x:Name="FitModeLabelText" Text="Fit Mode" Opacity="0.75" />
+                        <ComboBox x:Name="FitModeBox" SelectedIndex="0">
+                            <ComboBoxItem x:Name="FitLetterboxItem" Tag="letterbox" Content="letterbox" />
+                            <ComboBoxItem x:Name="FitCropItem" Tag="crop" Content="crop" />
+                            <ComboBoxItem x:Name="FitStretchItem" Tag="stretch" Content="stretch" />
+                        </ComboBox>
+                    </StackPanel>
+                </Grid>
+
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Spacing="6">
+                        <TextBlock x:Name="ResolutionLabelText" Text="Resolution" Opacity="0.75" />
+                        <ComboBox x:Name="ResolutionBox" SelectedIndex="1">
+                            <ComboBoxItem Content="640x480" />
+                            <ComboBoxItem Content="1280x720" />
+                            <ComboBoxItem Content="1920x1080" />
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Spacing="6">
+                        <TextBlock x:Name="FpsLabelText" Text="FPS" Opacity="0.75" />
+                        <ComboBox x:Name="FpsBox" SelectedIndex="1">
+                            <ComboBoxItem Content="24" />
+                            <ComboBoxItem Content="30" />
+                            <ComboBoxItem Content="60" />
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Spacing="6">
+                        <TextBlock x:Name="BitrateLabelText" Text="Bitrate" Opacity="0.75" />
+                        <TextBox x:Name="BitrateBox" Text="4000000" PlaceholderText="video bitrate bps" />
+                    </StackPanel>
+                </Grid>
+
+                <CheckBox x:Name="AudioEnabledBox" IsChecked="True" Content="Audio Enabled" />
+                <CheckBox x:Name="AutoStopReceiverBox" IsChecked="True" Content="Stop managed receiver on exit" />
+
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" x:Name="SetupAdbButton" Content="Setup ADB" Click="OnSetupAdb" />
+                    <Button Grid.Column="1" x:Name="RefreshDevicesButton" Content="Refresh Devices" Click="OnRefreshDevices" />
+                </Grid>
+
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" x:Name="StartSessionButton" Content="Start v2 Session" Click="OnStartSession" />
+                    <Button Grid.Column="1" x:Name="StopSessionButton" Content="Stop v2 Session" Click="OnStopSession" />
+                </Grid>
+
+                <TextBox x:Name="SessionIdBox" PlaceholderText="session id" />
+
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" x:Name="FetchStatsButton" Content="Fetch v2 Stats" Click="OnFetchStats" />
+                    <Button Grid.Column="1" x:Name="AutoRefreshButton" Content="Auto Refresh Stats (5s)" Click="OnToggleAutoRefreshStats" />
+                </Grid>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Grid Grid.Column="1" Padding="12,20,20,20">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
             <TextBlock x:Name="OutputTitleText" Text="Output" FontSize="16" Opacity="0.8" />
-            <TextBox x:Name="OutputBox" AcceptsReturn="True" TextWrapping="Wrap" IsReadOnly="True" MinHeight="520" />
-        </StackPanel>
+            <TextBox
+                Grid.Row="1"
+                x:Name="OutputBox"
+                Margin="0,10,0,0"
+                AcceptsReturn="True"
+                TextWrapping="Wrap"
+                IsReadOnly="True"
+                VerticalAlignment="Stretch"
+                HorizontalAlignment="Stretch"
+                ScrollViewer.VerticalScrollBarVisibility="Auto"
+                ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+        </Grid>
     </Grid>
 </Window>

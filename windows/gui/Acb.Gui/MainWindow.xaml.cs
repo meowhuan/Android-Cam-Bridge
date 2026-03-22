@@ -39,13 +39,13 @@ public sealed partial class MainWindow : Window
         try
         {
             await EnsureReceiverReadyAsync();
-            OutputBox.Text = await _client.SetupAdbAsync();
+            AppendOutput(await _client.SetupAdbAsync(), "adb setup");
             AppLogger.Info("adb setup requested");
         }
         catch (Exception ex)
         {
             AppLogger.Error("adb setup failed", ex);
-            OutputBox.Text = ex.Message;
+            AppendError(ex);
         }
     }
 
@@ -54,13 +54,13 @@ public sealed partial class MainWindow : Window
         try
         {
             await EnsureReceiverReadyAsync();
-            OutputBox.Text = await _client.GetDevicesAsync();
+            AppendOutput(await _client.GetDevicesAsync(), "devices");
             AppLogger.Info("devices refreshed");
         }
         catch (Exception ex)
         {
             AppLogger.Error("refresh devices failed", ex);
-            OutputBox.Text = ex.Message;
+            AppendError(ex);
         }
     }
 
@@ -80,7 +80,7 @@ public sealed partial class MainWindow : Window
 
             if (connectionMode == "attach")
             {
-                OutputBox.Text = $"attach mode: receiver={ReceiverAddressBox.Text}, fitMode={fitMode}, quality={qualityPreset}. no session start requested.";
+                AppendOutput($"attach mode: receiver={ReceiverAddressBox.Text}, fitMode={fitMode}, quality={qualityPreset}. no session start requested.", "attach");
                 AppLogger.Info("attach mode selected, no start session");
                 return;
             }
@@ -88,7 +88,7 @@ public sealed partial class MainWindow : Window
             if (transport == "usb-adb")
             {
                 var adbResp = await _client.SetupAdbAsync();
-                OutputBox.Text = adbResp;
+                AppendOutput(adbResp, "adb setup");
             }
 
             var options = new StartSessionOptions
@@ -102,7 +102,7 @@ public sealed partial class MainWindow : Window
             };
 
             var sessionResp = await _client.StartV2SessionAsync(options);
-            OutputBox.Text = sessionResp;
+            AppendOutput(sessionResp, "session start");
             AppLogger.Info($"session start requested transport={transport} {width}x{height}@{fps} bitrate={bitrate}");
 
             var sessionId = ExtractSessionId(sessionResp);
@@ -114,7 +114,7 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             AppLogger.Error("start session failed", ex);
-            OutputBox.Text = ex.Message;
+            AppendError(ex);
         }
     }
 
@@ -126,17 +126,17 @@ public sealed partial class MainWindow : Window
             var id = SessionIdBox.Text?.Trim();
             if (string.IsNullOrWhiteSpace(id))
             {
-                OutputBox.Text = IsZh() ? "请先输入 session id" : "please input session id";
+                AppendOutput(IsZh() ? "请先输入 session id" : "please input session id", "validation");
                 return;
             }
 
-            OutputBox.Text = await _client.StopV2SessionAsync(id);
+            AppendOutput(await _client.StopV2SessionAsync(id), "session stop");
             AppLogger.Info($"session stop requested sessionId={id}");
         }
         catch (Exception ex)
         {
             AppLogger.Error("stop session failed", ex);
-            OutputBox.Text = ex.Message;
+            AppendError(ex);
         }
     }
 
@@ -148,16 +148,16 @@ public sealed partial class MainWindow : Window
             var id = SessionIdBox.Text?.Trim();
             if (string.IsNullOrWhiteSpace(id))
             {
-                OutputBox.Text = IsZh() ? "请先输入 session id" : "please input session id";
+                AppendOutput(IsZh() ? "请先输入 session id" : "please input session id", "validation");
                 return;
             }
 
-            OutputBox.Text = await _client.GetV2StatsAsync(id);
+            AppendOutput(await _client.GetV2StatsAsync(id), "stats");
         }
         catch (Exception ex)
         {
             AppLogger.Error("fetch stats failed", ex);
-            OutputBox.Text = ex.Message;
+            AppendError(ex);
         }
     }
 
@@ -167,12 +167,12 @@ public sealed partial class MainWindow : Window
         if (_autoRefreshEnabled)
         {
             _statsTimer.Start();
-            OutputBox.Text = IsZh() ? "已开启自动刷新统计（5秒）" : "auto stats refresh enabled (5s)";
+            AppendOutput(IsZh() ? "已开启自动刷新统计（5秒）" : "auto stats refresh enabled (5s)", "stats");
         }
         else
         {
             _statsTimer.Stop();
-            OutputBox.Text = IsZh() ? "已关闭自动刷新统计" : "auto stats refresh disabled";
+            AppendOutput(IsZh() ? "已关闭自动刷新统计" : "auto stats refresh disabled", "stats");
         }
         ApplyLanguage();
     }
@@ -185,11 +185,12 @@ public sealed partial class MainWindow : Window
             await EnsureReceiverReadyAsync();
             var id = SessionIdBox.Text?.Trim();
             if (string.IsNullOrWhiteSpace(id)) return;
-            OutputBox.Text = await _client.GetV2StatsAsync(id);
+            AppendOutput(await _client.GetV2StatsAsync(id), "stats auto");
         }
         catch (Exception ex)
         {
             AppLogger.Error("auto stats tick failed", ex);
+            AppendError(ex);
         }
     }
 
@@ -332,6 +333,15 @@ public sealed partial class MainWindow : Window
         AppTitleText.Text = "ACB Receiver";
         ConnectionTitleText.Text = zh ? "连接" : "Connection";
         OutputTitleText.Text = zh ? "输出" : "Output";
+        LanguageLabelText.Text = zh ? "语言" : "Language";
+        ReceiverUrlLabelText.Text = zh ? "Receiver 地址" : "Receiver URL";
+        ConnectionModeLabelText.Text = zh ? "连接模式" : "Connection Mode";
+        TransportLabelText.Text = zh ? "传输方式" : "Transport";
+        QualityLabelText.Text = zh ? "画质预设" : "Quality";
+        FitModeLabelText.Text = zh ? "画面适配" : "Fit Mode";
+        ResolutionLabelText.Text = zh ? "分辨率" : "Resolution";
+        FpsLabelText.Text = "FPS";
+        BitrateLabelText.Text = zh ? "视频码率" : "Bitrate";
         ReceiverAddressBox.PlaceholderText = zh ? "Receiver 地址" : "receiver address";
         BitrateBox.PlaceholderText = zh ? "视频码率 bps" : "video bitrate bps";
         SessionIdBox.PlaceholderText = "session id";
@@ -399,5 +409,27 @@ public sealed partial class MainWindow : Window
         var end = json.IndexOf('"', start);
         if (end <= start) return null;
         return json.Substring(start, end - start);
+    }
+
+    private void AppendOutput(string message, string? tag = null)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return;
+        var prefix = $"[{DateTime.Now:HH:mm:ss}]";
+        if (!string.IsNullOrWhiteSpace(tag))
+        {
+            prefix += $" [{tag}]";
+        }
+
+        if (!string.IsNullOrWhiteSpace(OutputBox.Text))
+        {
+            OutputBox.Text += Environment.NewLine + Environment.NewLine;
+        }
+        OutputBox.Text += prefix + Environment.NewLine + message.Trim();
+        OutputBox.SelectionStart = OutputBox.Text.Length;
+    }
+
+    private void AppendError(Exception ex)
+    {
+        AppendOutput($"{ex.GetType().Name}: {ex.Message}", "error");
     }
 }

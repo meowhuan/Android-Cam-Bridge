@@ -1,133 +1,163 @@
 # Android Cam Bridge (ACB)
 
-## English
-Android camera streaming project for **Windows host + Android sender**, with OBS integration and v2 H.264 path.
+面向 **Android 采集端 + Windows 接收端** 的摄像头桥接项目，支持：
+- Android CameraX 采集
+- Windows Receiver（HTTP 控制面 + v2 WebSocket 媒体面）
+- OBS Source 插件接入
+- WinUI GUI 控制台
+- 一键打包与安装器发布流程
 
-### Features
-- Android app capture and stream (USB ADB / LAN)
-- Windows receiver (`acb-receiver`) with v1 compatibility + v2 media path
-- OBS plugin (`acb-obs-plugin`) attaching to receiver APIs
-- Optional WinUI GUI (`Acb.Gui`) for session management and diagnostics
+## 当前仓库包含的部件
 
-### Repository Layout
-- `android/` Android app (Kotlin, CameraX + MediaCodec)
-- `windows/receiver/` Windows receiver core (C++17)
-- `windows/obs-plugin/` OBS source plugin (C++17)
-- `windows/gui/Acb.Gui/` WinUI 3 control panel
-- `windows/virtualcam-bridge/` virtual camera bridge (planned/optional)
-- `protocol/` signaling and media protocol docs
-- `installer/` installer scripts
-- `docs/` setup and troubleshooting (English + zh-CN)
-- `scripts/` build/test/package scripts
+| 部件 | 路径 | 作用 | 当前状态 |
+| --- | --- | --- | --- |
+| Android App | `android/` | CameraX 采集、H.264/AAC 编码、v1+v2 推流 | 可用 |
+| Receiver | `windows/receiver/` | 会话控制、帧接收、v2 H.264 解码、统计接口 | 可用 |
+| OBS Plugin | `windows/obs-plugin/` | 在 OBS 中提供 `android_cam_source` 源 | 可用 |
+| WinUI GUI | `windows/gui/Acb.Gui/` | Receiver 地址配置、会话管理、统计与日志 | 可用 |
+| VirtualCam Bridge | `windows/virtualcam-bridge/` | 虚拟摄像头桥接实验入口 | 预留/实验 |
+| Protocol Docs | `protocol/` | 信令、v2 媒体帧格式说明 | 可用 |
+| Installer | `installer/` + `scripts/` | Payload 打包、Inno Setup 安装器 | 可用 |
+| CI/Release | `.github/workflows/` | CI 构建 + Tag 发布资产 | 可用 |
 
-### APIs
-Receiver default address: `http://127.0.0.1:39393`
+## 架构速览
 
-- v1 (compatibility):
-  - `POST /api/v1/session/start`
-  - `POST /api/v1/session/answer`
-  - `POST /api/v1/session/stop`
-  - `GET /api/v1/devices`
-  - `GET /api/v1/stats/{sessionId}`
-- v2 (current):
-  - `POST /api/v2/session/start`
-  - `POST /api/v2/session/stop`
-  - `GET /api/v2/session/{sessionId}/stats`
-  - `POST /api/v2/adb/setup`
+1. Android 启动后请求 Receiver `POST /api/v2/session/start`
+2. Receiver 返回 `wsUrl`，Android 通过 `ws://.../ws/v2/media` 发送二进制媒体帧
+3. Receiver 解析并累计统计，视频帧可通过 `GET /api/v2/frame.bgra` 拉取
+4. OBS 插件优先拉取 `/api/v2/frame.bgra`，失败时回退 `/api/v1/frame.jpg`
+5. GUI 通过 Receiver HTTP API 做 ADB 设置、会话管理和统计查看
 
-More details: [`protocol/v2/README.md`](protocol/v2/README.md).
+## API 概览
 
-### OBS Plugin Compatibility
-- `acb-obs-plugin` is built against **OBS SDK/libobs 32.0.4** by default.
-- If your OBS runtime is newer or older (for example 32.1+), OBS may reject loading the plugin due to ABI mismatch (`compiled with newer libobs`).
-- Recommendation: keep plugin build SDK and installed OBS on the same minor version.
-
-### Build
-```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Release
-```
-
-Android build (from `android/`):
-```powershell
-gradle :app:assembleDebug
-```
-
-### Release Checklist
-1. Build receiver and OBS plugin in `Release`.
-2. Build Android APK and verify USB ADB + LAN streaming.
-3. Verify OBS source attach/start/stop and aspect-ratio behavior.
-4. Build/package installer from `installer/` scripts.
-5. Run uninstall check (no orphan process/service).
-6. For GitHub publishing, use automated workflow in [`docs/RELEASE.md`](docs/RELEASE.md).
-
-### Docs
-- Setup (EN): [`docs/SETUP.md`](docs/SETUP.md)
-- Setup (zh-CN): [`docs/SETUP.zh-CN.md`](docs/SETUP.zh-CN.md)
-- Troubleshooting (EN): [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
-- Troubleshooting (zh-CN): [`docs/TROUBLESHOOTING.zh-CN.md`](docs/TROUBLESHOOTING.zh-CN.md)
-- Release automation: [`docs/RELEASE.md`](docs/RELEASE.md)
-
----
-
-## 中文
-面向 **Windows 主机 + Android 采集端** 的摄像头串流项目，支持 OBS 集成与 v2 H.264 主链路。
-
-### 功能概览
-- Android 端采集与推流（USB ADB / 局域网）
-- Windows 接收端（`acb-receiver`），兼容 v1 并支持 v2 媒体链路
-- OBS 插件（`acb-obs-plugin`），通过 receiver 接口工作
-- 可选 WinUI GUI（`Acb.Gui`），用于会话管理和诊断
-
-### 仓库结构
-- `android/` Android 应用（Kotlin, CameraX + MediaCodec）
-- `windows/receiver/` Windows 接收核心（C++17）
-- `windows/obs-plugin/` OBS Source 插件（C++17）
-- `windows/gui/Acb.Gui/` WinUI 3 控制面板
-- `windows/virtualcam-bridge/` 虚拟摄像头桥接（规划/可选）
-- `protocol/` 协议文档（信令与媒体）
-- `installer/` 安装器脚本
-- `docs/` 文档（英文 + 中文）
-- `scripts/` 构建/测试/打包脚本
-
-### 接口
 Receiver 默认地址：`http://127.0.0.1:39393`
 
-- v1（兼容）
-  - `POST /api/v1/session/start`
-  - `POST /api/v1/session/answer`
-  - `POST /api/v1/session/stop`
-  - `GET /api/v1/devices`
-  - `GET /api/v1/stats/{sessionId}`
-- v2（当前主链路）
-  - `POST /api/v2/session/start`
-  - `POST /api/v2/session/stop`
-  - `GET /api/v2/session/{sessionId}/stats`
-  - `POST /api/v2/adb/setup`
+### v1（兼容路径）
+- `POST /api/v1/session/start`
+- `POST /api/v1/session/answer`
+- `POST /api/v1/session/stop`
+- `POST /api/v1/frame`
+- `POST /api/v1/audio`
+- `GET /api/v1/frame.jpg`
+- `GET /api/v1/devices`
+- `GET /api/v1/stats/{sessionId}`
 
-详细说明见：[`protocol/v2/README.md`](protocol/v2/README.md)。
+### v2（主链路）
+- `POST /api/v2/session/start`
+- `POST /api/v2/session/stop`
+- `POST /api/v2/adb/setup`
+- `GET /api/v2/session/{sessionId}/stats`
+- `GET /api/v2/frame.bgra`
+- `WS /ws/v2/media`
 
-### OBS 插件兼容性
-- `acb-obs-plugin` 默认按 **OBS SDK/libobs 32.0.4** 编译。
-- 如果本机 OBS 版本高于或低于该小版本（例如 32.1+），可能因 ABI 不匹配被拒绝加载（`compiled with newer libobs`）。
-- 建议：插件编译所用 SDK 与已安装 OBS 保持同一小版本。
+详细协议见：
+- [`protocol/README.md`](protocol/README.md)
+- [`protocol/v2/README.md`](protocol/v2/README.md)
+- [`protocol/v2/media_frame.md`](protocol/v2/media_frame.md)
 
-### 构建
+## 开发环境要求
+
+### Windows
+- Visual Studio 2022（Desktop C++）
+- CMake 3.22+
+- PowerShell 7+
+- .NET 10 SDK（GUI）
+- Java 17 + Gradle（Android 构建）
+- Android Platform Tools（ADB）
+- OBS Studio（用于插件联调）
+
+### OBS 兼容性注意
+- 当前 CI/Release 以 **OBS 32.0.4** SDK 构建插件。
+- 建议本机 OBS 版本与插件构建使用的 libobs 小版本保持一致，避免 ABI 不匹配导致加载失败。
+
+## 快速开始
+
+### 1) 构建 Windows 目标
 ```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Release
+pwsh ./scripts/build.ps1 -Config Release
 ```
 
-Android 构建（在 `android/` 目录）：
+若需要构建可加载的真实 OBS 插件，请提供 OBS SDK 路径：
 ```powershell
+pwsh ./scripts/build.ps1 -Config Release `
+  -ObsIncludeDir "C:/path/to/obs-studio/libobs" `
+  -ObsGeneratedIncludeDir "C:/path/to/obs-studio/build_x64/config" `
+  -ObsLibDir "C:/path/to/obs-studio/build_x64/libobs/Release"
+```
+
+### 2) 启动 Receiver
+```powershell
+.\build\windows\receiver\Release\acb-receiver.exe
+```
+
+### 3) 运行 GUI（可选）
+```powershell
+pwsh ./scripts/run-gui.ps1
+```
+
+### 4) Android 端构建
+```powershell
+cd android
 gradle :app:assembleDebug
 ```
 
-### 发布检查清单
-1. 以 `Release` 构建 receiver 与 OBS 插件。
-2. 构建 Android APK，验证 USB ADB 与 LAN 推流。
-3. 验证 OBS 插件 Attach / Start / Stop 与画面比例策略。
-4. 使用 `installer/` 脚本生成安装包。
-5. 验证卸载流程（无残留进程/服务）。
-6. GitHub 发布使用自动化流程，见 [`docs/RELEASE.md`](docs/RELEASE.md)。
+## 打包与安装
 
+### 生成 payload 目录
+```powershell
+pwsh ./scripts/package.ps1 -Version 0.2.4
+```
+输出：`dist/acb-win-x64`
+
+### 生成安装器 EXE（Inno Setup）
+```powershell
+pwsh ./scripts/build-installer.ps1 -Version 0.2.4
+```
+输出：`dist/installer/ACB-Setup-0.2.4.exe`
+
+### 本地安装 / 卸载
+```powershell
+pwsh ./dist/acb-win-x64/install-acb.ps1
+pwsh "C:\Program Files\ACB\uninstall-acb.ps1"
+```
+
+安装器细节见 [`docs/INSTALLER.md`](docs/INSTALLER.md)。
+
+## 自动化发布
+
+- CI：`.github/workflows/ci.yml`
+- Release：`.github/workflows/release.yml`
+
+Tag 发布示例：
+```powershell
+git tag v0.2.4
+git push origin v0.2.4
+```
+
+发布文档：
+- [`docs/RELEASE.md`](docs/RELEASE.md)
+- [`docs/RELEASE_NOTES.md`](docs/RELEASE_NOTES.md)
+
+## 文档导航
+
+- GUI 使用说明：[`docs/GUI.md`](docs/GUI.md)
+- 安装说明：[`docs/INSTALLER.md`](docs/INSTALLER.md)
+- 环境与接入（EN）：[`docs/SETUP.md`](docs/SETUP.md)
+- 环境与接入（中文）：[`docs/SETUP.zh-CN.md`](docs/SETUP.zh-CN.md)
+- 故障排查（EN）：[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
+- 故障排查（中文）：[`docs/TROUBLESHOOTING.zh-CN.md`](docs/TROUBLESHOOTING.zh-CN.md)
+
+## 目录结构
+
+```text
+android/                    Android 采集端
+windows/receiver/           Windows 接收端
+windows/obs-plugin/         OBS 插件
+windows/gui/Acb.Gui/        WinUI GUI
+windows/virtualcam-bridge/  虚拟摄像头桥接（实验）
+protocol/                   协议定义与文档
+installer/                  安装器模板（Inno/WiX）
+scripts/                    构建/打包/安装脚本
+docs/                       使用、发布、排障文档
+.github/workflows/          CI 与发布流水线
+```

@@ -20,23 +20,26 @@ public sealed class StartSessionOptions
 
 public class ReceiverApiClient
 {
-    private readonly HttpClient _http = new() { BaseAddress = new Uri("http://127.0.0.1:39393") };
+    private readonly HttpClient _http = new();
+    private Uri _baseUri = new("http://127.0.0.1:39393");
 
     public void SetBaseAddress(string address)
     {
         if (string.IsNullOrWhiteSpace(address)) return;
         if (!Uri.TryCreate(address.Trim(), UriKind.Absolute, out var uri)) return;
-        _http.BaseAddress = uri;
+        _baseUri = uri;
     }
 
     public async Task<string> GetDevicesAsync()
     {
-        return await _http.GetStringAsync("/api/v1/devices");
+        return await _http.GetStringAsync(BuildUri("/api/v1/devices"));
     }
 
     public async Task<string> SetupAdbAsync()
     {
-        var resp = await _http.PostAsync("/api/v2/adb/setup", new StringContent("{}", Encoding.UTF8, "application/json"));
+        var resp = await _http.PostAsync(
+            BuildUri("/api/v2/adb/setup"),
+            new StringContent("{}", Encoding.UTF8, "application/json"));
         return await resp.Content.ReadAsStringAsync();
     }
 
@@ -66,7 +69,7 @@ public class ReceiverApiClient
         };
         var json = JsonSerializer.Serialize(payload);
         var resp = await _http.PostAsync(
-            "/api/v2/session/start",
+            BuildUri("/api/v2/session/start"),
             new StringContent(json, Encoding.UTF8, "application/json"));
         return await resp.Content.ReadAsStringAsync();
     }
@@ -74,12 +77,19 @@ public class ReceiverApiClient
     public async Task<string> StopV2SessionAsync(string sessionId)
     {
         var payload = JsonSerializer.Serialize(new { sessionId });
-        var resp = await _http.PostAsync("/api/v2/session/stop", new StringContent(payload, Encoding.UTF8, "application/json"));
+        var resp = await _http.PostAsync(
+            BuildUri("/api/v2/session/stop"),
+            new StringContent(payload, Encoding.UTF8, "application/json"));
         return await resp.Content.ReadAsStringAsync();
     }
 
     public async Task<string> GetV2StatsAsync(string sessionId)
     {
-        return await _http.GetStringAsync($"/api/v2/session/{sessionId}/stats");
+        return await _http.GetStringAsync(BuildUri($"/api/v2/session/{sessionId}/stats"));
+    }
+
+    private Uri BuildUri(string path)
+    {
+        return new(_baseUri, path);
     }
 }
