@@ -8,4 +8,4 @@ add_executable(acb-receiver
 
 target_include_directories(acb-receiver PRIVATE include)
 
-target_link_libraries(acb-receiver PRIVATE ws2_32 bcrypt crypt32 mfplat mfuuid ole32 wmcodecdspuuid)
+target_link_libraries(acb-receiver PRIVATE ws2_32 setupapi bcrypt crypt32 mfplat mfuuid ole32 wmcodecdspuuid)

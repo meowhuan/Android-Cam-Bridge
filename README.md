@@ -141,6 +141,8 @@ git push origin v0.2.4
 ## 文档导航
 
 - GUI 使用说明：[`docs/GUI.md`](docs/GUI.md)
+- USB Native 说明：[`docs/USB_NATIVE.md`](docs/USB_NATIVE.md)
+- VirtualCam Bridge：[`docs/VIRTUALCAM_BRIDGE.md`](docs/VIRTUALCAM_BRIDGE.md)
 - 安装说明：[`docs/INSTALLER.md`](docs/INSTALLER.md)
 - 环境与接入（EN）：[`docs/SETUP.md`](docs/SETUP.md)
 - 环境与接入（中文）：[`docs/SETUP.zh-CN.md`](docs/SETUP.zh-CN.md)

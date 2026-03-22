@@ -39,6 +39,16 @@ public sealed partial class MainWindow : Window
         try
         {
             await EnsureReceiverReadyAsync();
+            var transport = GetComboValue(TransportBox, "usb-adb");
+            if (transport == "usb-native")
+            {
+                AppendOutput(
+                    IsZh()
+                        ? "USB Native 模式不需要 ADB 映射，请直接确保手机可通过 USB 网络访问 Receiver。"
+                        : "USB Native mode does not use ADB mapping. Ensure phone can reach Receiver over USB networking.",
+                    "usb-native");
+                return;
+            }
             AppendOutput(await _client.SetupAdbAsync(), "adb setup");
             AppLogger.Info("adb setup requested");
         }
@@ -89,6 +99,14 @@ public sealed partial class MainWindow : Window
             {
                 var adbResp = await _client.SetupAdbAsync();
                 AppendOutput(adbResp, "adb setup");
+            }
+            else if (transport == "usb-native")
+            {
+                AppendOutput(
+                    IsZh()
+                        ? "USB Native 已选：跳过 ADB 配置，按原始 transport=usb-native 发起会话。"
+                        : "USB Native selected: skipping ADB setup and starting session with transport=usb-native.",
+                    "usb-native");
             }
 
             var options = new StartSessionOptions
@@ -349,6 +367,7 @@ public sealed partial class MainWindow : Window
         ConnectionModeManagedItem.Content = zh ? "托管（自动）" : "Managed";
         ConnectionModeAttachItem.Content = zh ? "附加（仅连接）" : "Attach";
         TransportUsbItem.Content = zh ? "USB（ADB）" : "USB (ADB)";
+        TransportUsbNativeItem.Content = zh ? "USB（Native）" : "USB (Native)";
         TransportLanItem.Content = zh ? "无线局域网" : "LAN (Wi-Fi)";
         QualityBalancedItem.Content = zh ? "均衡" : "Balanced";
         QualityHighItem.Content = zh ? "高质量" : "High";

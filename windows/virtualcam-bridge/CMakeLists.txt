@@ -3,4 +3,4 @@ project(acb_virtualcam_bridge LANGUAGES CXX)
 
 add_executable(acb-virtualcam-bridge src/main.cpp)
 
-target_link_libraries(acb-virtualcam-bridge PRIVATE ws2_32)
+target_link_libraries(acb-virtualcam-bridge PRIVATE ws2_32 winhttp)

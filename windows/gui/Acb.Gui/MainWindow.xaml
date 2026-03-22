@@ -40,6 +40,7 @@
                         <TextBlock x:Name="TransportLabelText" Text="Transport" Opacity="0.75" />
                         <ComboBox x:Name="TransportBox" SelectedIndex="0">
                             <ComboBoxItem x:Name="TransportUsbItem" Tag="usb-adb" Content="usb-adb" />
+                            <ComboBoxItem x:Name="TransportUsbNativeItem" Tag="usb-native" Content="usb-native" />
                             <ComboBoxItem x:Name="TransportLanItem" Tag="lan" Content="lan" />
                         </ComboBox>
                     </StackPanel>

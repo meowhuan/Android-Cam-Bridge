@@ -99,6 +99,14 @@
                 android:layout_marginStart="8dp"
                 android:text="@string/label_sleep_protection"
                 android:textColor="#FFFFFF" />
+
+            <CheckBox
+                android:id="@+id/backgroundStreamingCheckbox"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="@string/label_background_streaming"
+                android:textColor="#FFFFFF" />
         </LinearLayout>
 
         <LinearLayout

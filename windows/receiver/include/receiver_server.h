@@ -64,6 +64,23 @@ class ReceiverServer {
   std::string activeSessionId_ = "sess_demo_001";
   std::string activeAuthToken_ = "token_demo";
   std::string activeTransport_ = "lan";
+  std::mutex usbNativeMutex_;
+  bool usbNativeConnected_ = false;
+  std::string usbNativeDevicePath_;
+  std::string usbNativeDescription_;
+  std::string usbNativeLastError_;
+  uint64_t usbNativeLastScanMs_ = 0;
+  std::mutex usbLinkMutex_;
+  bool usbLinkActive_ = false;
+  std::string usbLinkId_;
+  std::string usbLinkSessionId_;
+  std::string usbLinkDevicePath_;
+  uint64_t usbLinkLastPacketMs_ = 0;
+  uint64_t usbLinkRxPackets_ = 0;
+  uint64_t usbLinkRxBytes_ = 0;
+  uint32_t usbLinkExpectedSeq_ = 0;
+  uint32_t usbLinkMtu_ = 16384;
+  std::string usbLinkLastError_;
   bool mfStarted_ = false;
 
   void AcceptLoop();

@@ -6,6 +6,7 @@
     <string name="hint_receiver_addr">Receiver IP:Port (USB: 127.0.0.1:39393)</string>
     <string name="label_push_mic">Push microphone audio</string>
     <string name="label_sleep_protection">Keep screen awake while streaming</string>
+    <string name="label_background_streaming">Keep streaming in background</string>
     <string name="label_lock_landscape">Lock landscape orientation</string>
     <string name="btn_orientation_landscape_off">Landscape: Off</string>
     <string name="btn_orientation_landscape_on">Landscape: On</string>
@@ -13,4 +14,7 @@
     <string name="btn_stop_stream">Stop Stream</string>
     <string name="btn_hide_controls">Hide UI</string>
     <string name="btn_show_controls">Show UI</string>
+    <string name="bg_service_title">ACB streaming is running</string>
+    <string name="bg_service_text">Background streaming to %1$s</string>
+    <string name="status_streaming_bg">Background streaming %1$s -&gt; %2$s</string>
 </resources>

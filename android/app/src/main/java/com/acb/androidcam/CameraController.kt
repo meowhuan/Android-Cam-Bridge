@@ -34,7 +34,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class CameraController(
     private val context: Context,
     private val lifecycleOwner: LifecycleOwner,
-    private val previewView: PreviewView,
+    private val previewView: PreviewView?,
 ) {
     enum class TransportMode { LAN, USB_ADB, USB_NATIVE }
 
@@ -71,7 +71,11 @@ class CameraController(
 
         Log.i("ACB", "start transport=$transport receiver=$currentReceiver ${width}x$height@$fps bitrate=$bitrate mic=$pushMic")
 
-        val transportName = if (transport == TransportMode.LAN) "lan" else "usb-adb"
+        val transportName = when (transport) {
+            TransportMode.LAN -> "lan"
+            TransportMode.USB_NATIVE -> "usb-native"
+            TransportMode.USB_ADB -> "usb-adb"
+        }
         val v2Session = v2Client.startSession(currentReceiver, transportName)
         if (v2Session != null) {
             v2Client.connect(v2Session.wsUrl)
@@ -83,18 +87,13 @@ class CameraController(
         providerFuture.addListener({
             val provider = providerFuture.get()
 
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(previewView.surfaceProvider)
-            }
-
             @Suppress("DEPRECATION")
             val analysis = ImageAnalysis.Builder()
                 .setTargetResolution(android.util.Size(width, height))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
 
-            val rotation = previewView.display?.rotation ?: android.view.Surface.ROTATION_0
-            preview.targetRotation = rotation
+            val rotation = previewView?.display?.rotation ?: android.view.Surface.ROTATION_0
             analysis.targetRotation = rotation
 
             analysis.setAnalyzer(cameraExecutor) { imageProxy ->
@@ -108,8 +107,10 @@ class CameraController(
                     val jpeg = imageProxyToJpeg(imageProxy, cropRect)
                     val w = cropRect.width()
                     val h = cropRect.height()
-                    uploadExecutor.execute {
-                        postFrame(jpeg, w, h)
+                    if (shouldPushLegacyHttp()) {
+                        uploadExecutor.execute {
+                            postFrame(jpeg, w, h)
+                        }
                     }
                     videoEncoder?.encode(imageProxy) { avc, isKey ->
                         v2Client.sendVideoFrame(avc, isKey)
@@ -122,15 +123,23 @@ class CameraController(
             }
 
             provider.unbindAll()
-            val viewPort = ViewPort.Builder(android.util.Rational(width, height), rotation)
-                .setScaleType(ViewPort.FILL_CENTER)
-                .build()
-            val group = UseCaseGroup.Builder()
-                .setViewPort(viewPort)
-                .addUseCase(preview)
-                .addUseCase(analysis)
-                .build()
-            provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, group)
+            if (previewView != null) {
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                    it.targetRotation = rotation
+                }
+                val viewPort = ViewPort.Builder(android.util.Rational(width, height), rotation)
+                    .setScaleType(ViewPort.FILL_CENTER)
+                    .build()
+                val group = UseCaseGroup.Builder()
+                    .setViewPort(viewPort)
+                    .addUseCase(preview)
+                    .addUseCase(analysis)
+                    .build()
+                provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, group)
+            } else {
+                provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, analysis)
+            }
         }, ContextCompat.getMainExecutor(context))
 
         if (pushMic) {
@@ -248,7 +257,9 @@ class CameraController(
                 while (running.get() && micRunning.get()) {
                     val read = recorder.read(buffer, 0, buffer.size)
                     if (read > 0) {
-                        postAudio(buffer, read, sampleRate, 1)
+                        if (shouldPushLegacyHttp()) {
+                            postAudio(buffer, read, sampleRate, 1)
+                        }
                         audioEncoder?.encodePcm(buffer, read, sampleRate, 1) { aac ->
                             v2Client.sendAudioFrame(aac, aac.size)
                         }
@@ -373,5 +384,10 @@ class CameraController(
         } finally {
             conn?.disconnect()
         }
+    }
+
+    private fun shouldPushLegacyHttp(): Boolean {
+        // USB native mode should run as v2-only media path.
+        return currentMode != TransportMode.USB_NATIVE
     }
 }

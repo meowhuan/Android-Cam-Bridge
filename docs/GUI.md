@@ -9,10 +9,11 @@ Project path: `windows/gui/Acb.Gui`.
 - Connection mode:
   - `managed`: GUI handles ADB setup + session start/stop
   - `attach`: no new session, only attach-style monitoring intent
-- Transport: `usb-adb` / `lan`
+- Transport: `usb-adb` / `usb-native` (experimental) / `lan`
 - Quality preset: `balanced` / `high` / `ultra` (maps to bitrate defaults)
 - Fit mode semantic selector: `letterbox` / `crop` / `stretch` (for semantic parity with OBS plugin)
 - Stream settings: resolution / fps / bitrate / audio enabled
+- Android app supports optional background streaming mode via foreground service (toggle in app UI)
 - Session actions:
   - `Setup ADB` -> `/api/v2/adb/setup`
   - `Start v2 Session` -> `/api/v2/session/start`

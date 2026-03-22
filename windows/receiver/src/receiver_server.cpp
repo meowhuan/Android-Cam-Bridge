@@ -4,6 +4,9 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <setupapi.h>
+#include <initguid.h>
+#include <usbiodef.h>
 #include <bcrypt.h>
 #include <wincrypt.h>
 #include <mfapi.h>
@@ -15,6 +18,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -24,6 +28,7 @@
 #include <unordered_map>
 #include <vector>
 
+#pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "crypt32.lib")
 #pragma comment(lib, "mfplat.lib")
@@ -42,6 +47,13 @@ struct ParsedRequest {
   std::string body;
 };
 
+struct UsbNativeDevice {
+  std::string path;
+  std::string description;
+  std::string hardwareId;
+  bool androidCandidate = false;
+};
+
 std::string StatusText(int status) {
   switch (status) {
     case 200:
@@ -52,6 +64,8 @@ std::string StatusText(int status) {
       return "Not Found";
     case 500:
       return "Internal Server Error";
+    case 503:
+      return "Service Unavailable";
     default:
       return "OK";
   }
@@ -205,6 +219,146 @@ std::string JsonField(const std::string& body, const std::string& key, const std
     return fallback;
   }
   return body.substr(q1 + 1, q2 - q1 - 1);
+}
+
+uint32_t JsonFieldUInt(const std::string& body, const std::string& key, uint32_t fallback) {
+  const std::string token = "\"" + key + "\"";
+  const auto keyPos = body.find(token);
+  if (keyPos == std::string::npos) {
+    return fallback;
+  }
+  const auto colon = body.find(':', keyPos + token.size());
+  if (colon == std::string::npos) {
+    return fallback;
+  }
+  size_t start = colon + 1;
+  while (start < body.size() && std::isspace(static_cast<unsigned char>(body[start]))) {
+    ++start;
+  }
+  size_t end = start;
+  while (end < body.size() && std::isdigit(static_cast<unsigned char>(body[end]))) {
+    ++end;
+  }
+  if (end <= start) {
+    return fallback;
+  }
+  return static_cast<uint32_t>(std::strtoul(body.substr(start, end - start).c_str(), nullptr, 10));
+}
+
+std::string Utf16ToUtf8(const std::wstring& w) {
+  if (w.empty()) return "";
+  const int size = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
+  if (size <= 1) return "";
+  std::string out(static_cast<size_t>(size - 1), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, out.data(), size, nullptr, nullptr);
+  return out;
+}
+
+std::string Utf16ToUtf8(const wchar_t* w) {
+  if (w == nullptr || *w == L'\0') return "";
+  const int size = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+  if (size <= 1) return "";
+  std::string out(static_cast<size_t>(size - 1), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, w, -1, out.data(), size, nullptr, nullptr);
+  return out;
+}
+
+std::string GetDevRegPropertyString(HDEVINFO devInfo, SP_DEVINFO_DATA* devData, DWORD property) {
+  DWORD dataType = 0;
+  DWORD bytes = 0;
+  SetupDiGetDeviceRegistryPropertyW(devInfo, devData, property, &dataType, nullptr, 0, &bytes);
+  if (bytes == 0) return "";
+
+  std::vector<wchar_t> buf((bytes / sizeof(wchar_t)) + 2, L'\0');
+  if (!SetupDiGetDeviceRegistryPropertyW(devInfo,
+                                         devData,
+                                         property,
+                                         &dataType,
+                                         reinterpret_cast<PBYTE>(buf.data()),
+                                         static_cast<DWORD>(buf.size() * sizeof(wchar_t)),
+                                         &bytes)) {
+    return "";
+  }
+
+  return Utf16ToUtf8(buf.data());
+}
+
+bool LooksLikeAndroid(const std::string& text) {
+  const std::string lower = ToLower(text);
+  static const char* kTokens[] = {
+      "android", "adb", "mtp", "rndis", "pixel", "samsung", "xiaomi", "huawei", "oppo", "vivo", "oneplus"};
+  for (const char* token : kTokens) {
+    if (lower.find(token) != std::string::npos) {
+      return true;
+    }
+  }
+
+  static const char* kAndroidVidTokens[] = {"vid_18d1", "vid_04e8", "vid_2717", "vid_2a70", "vid_22d9", "vid_2d95"};
+  for (const char* token : kAndroidVidTokens) {
+    if (lower.find(token) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<UsbNativeDevice> EnumerateUsbNativeDevices() {
+  std::vector<UsbNativeDevice> out;
+  HDEVINFO devInfo = SetupDiGetClassDevsW(&GUID_DEVINTERFACE_USB_DEVICE, nullptr, nullptr,
+                                          DIGCF_DEVICEINTERFACE | DIGCF_PRESENT);
+  if (devInfo == INVALID_HANDLE_VALUE) {
+    return out;
+  }
+
+  for (DWORD i = 0;; ++i) {
+    SP_DEVICE_INTERFACE_DATA ifData{};
+    ifData.cbSize = sizeof(ifData);
+    if (!SetupDiEnumDeviceInterfaces(devInfo, nullptr, &GUID_DEVINTERFACE_USB_DEVICE, i, &ifData)) {
+      break;
+    }
+
+    DWORD required = 0;
+    SetupDiGetDeviceInterfaceDetailW(devInfo, &ifData, nullptr, 0, &required, nullptr);
+    if (required == 0) continue;
+    std::vector<uint8_t> detailBuf(required, 0);
+    auto* detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W*>(detailBuf.data());
+    detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
+
+    SP_DEVINFO_DATA devData{};
+    devData.cbSize = sizeof(devData);
+    if (!SetupDiGetDeviceInterfaceDetailW(devInfo, &ifData, detail, required, nullptr, &devData)) {
+      continue;
+    }
+
+    UsbNativeDevice dev;
+    dev.path = Utf16ToUtf8(detail->DevicePath);
+    dev.description = GetDevRegPropertyString(devInfo, &devData, SPDRP_FRIENDLYNAME);
+    if (dev.description.empty()) {
+      dev.description = GetDevRegPropertyString(devInfo, &devData, SPDRP_DEVICEDESC);
+    }
+    dev.hardwareId = GetDevRegPropertyString(devInfo, &devData, SPDRP_HARDWAREID);
+    dev.androidCandidate = LooksLikeAndroid(dev.description) || LooksLikeAndroid(dev.hardwareId);
+    out.push_back(std::move(dev));
+  }
+
+  SetupDiDestroyDeviceInfoList(devInfo);
+  return out;
+}
+
+std::string UsbNativeDevicesJson(const std::vector<UsbNativeDevice>& devices) {
+  std::ostringstream body;
+  body << "{\"devices\":[";
+  for (size_t i = 0; i < devices.size(); ++i) {
+    const auto& d = devices[i];
+    if (i > 0) body << ",";
+    body << "{\"path\":\"" << JsonEscape(d.path)
+         << "\",\"description\":\"" << JsonEscape(d.description)
+         << "\",\"hardwareId\":\"" << JsonEscape(d.hardwareId)
+         << "\",\"androidCandidate\":" << (d.androidCandidate ? "true" : "false")
+         << "}";
+  }
+  body << "]}";
+  return body.str();
 }
 
 bool RunCommandHidden(const std::string& commandLine) {
@@ -792,6 +946,172 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
     return Json(200, R"({"devices":[{"id":"android-camera","name":"Android Camera"}]})");
   }
 
+  if (req.method == "GET" && req.path == "/api/v2/usb-native/devices") {
+    const auto devices = EnumerateUsbNativeDevices();
+    {
+      std::lock_guard<std::mutex> lock(usbNativeMutex_);
+      usbNativeLastScanMs_ = NowMs();
+      if (devices.empty()) {
+        usbNativeConnected_ = false;
+        usbNativeDevicePath_.clear();
+        usbNativeDescription_.clear();
+        usbNativeLastError_ = "no_usb_devices";
+      } else {
+        const auto it = std::find_if(devices.begin(), devices.end(), [](const UsbNativeDevice& d) { return d.androidCandidate; });
+        if (it != devices.end()) {
+          usbNativeConnected_ = true;
+          usbNativeDevicePath_ = it->path;
+          usbNativeDescription_ = it->description;
+          usbNativeLastError_.clear();
+        } else {
+          usbNativeConnected_ = false;
+          usbNativeDevicePath_.clear();
+          usbNativeDescription_.clear();
+          usbNativeLastError_ = "no_android_candidate";
+        }
+      }
+    }
+    return Json(200, UsbNativeDevicesJson(devices));
+  }
+
+  if (req.method == "GET" && req.path == "/api/v2/usb-native/status") {
+    bool connected = false;
+    std::string path;
+    std::string description;
+    std::string error;
+    uint64_t lastScan = 0;
+    {
+      std::lock_guard<std::mutex> lock(usbNativeMutex_);
+      connected = usbNativeConnected_;
+      path = usbNativeDevicePath_;
+      description = usbNativeDescription_;
+      error = usbNativeLastError_;
+      lastScan = usbNativeLastScanMs_;
+    }
+    std::ostringstream body;
+    body << "{\"connected\":" << (connected ? "true" : "false")
+         << ",\"devicePath\":\"" << JsonEscape(path)
+         << "\",\"description\":\"" << JsonEscape(description)
+         << "\",\"lastError\":\"" << JsonEscape(error)
+         << "\",\"lastScanMs\":" << lastScan
+         << "}";
+    return Json(200, body.str());
+  }
+
+  if (req.method == "GET" && req.path == "/api/v2/usb-native/link") {
+    bool active = false;
+    std::string linkId;
+    std::string sessionId;
+    std::string devicePath;
+    uint64_t lastPacketMs = 0;
+    uint64_t rxPackets = 0;
+    uint64_t rxBytes = 0;
+    uint32_t expectedSeq = 0;
+    uint32_t mtu = 0;
+    std::string lastError;
+    {
+      std::lock_guard<std::mutex> lock(usbLinkMutex_);
+      active = usbLinkActive_;
+      linkId = usbLinkId_;
+      sessionId = usbLinkSessionId_;
+      devicePath = usbLinkDevicePath_;
+      lastPacketMs = usbLinkLastPacketMs_;
+      rxPackets = usbLinkRxPackets_;
+      rxBytes = usbLinkRxBytes_;
+      expectedSeq = usbLinkExpectedSeq_;
+      mtu = usbLinkMtu_;
+      lastError = usbLinkLastError_;
+    }
+    std::ostringstream body;
+    body << "{\"active\":" << (active ? "true" : "false")
+         << ",\"linkId\":\"" << JsonEscape(linkId)
+         << "\",\"sessionId\":\"" << JsonEscape(sessionId)
+         << "\",\"devicePath\":\"" << JsonEscape(devicePath)
+         << "\",\"lastPacketMs\":" << lastPacketMs
+         << ",\"rxPackets\":" << rxPackets
+         << ",\"rxBytes\":" << rxBytes
+         << ",\"expectedSeq\":" << expectedSeq
+         << ",\"mtu\":" << mtu
+         << ",\"lastError\":\"" << JsonEscape(lastError) << "\""
+         << "}";
+    return Json(200, body.str());
+  }
+
+  if (req.method == "POST" && req.path == "/api/v2/usb-native/handshake") {
+    const std::string sessionId = JsonField(req.body, "sessionId", "");
+    const std::string devicePath = JsonField(req.body, "devicePath", "");
+    const uint32_t mtu = JsonFieldUInt(req.body, "mtu", 16384);
+    if (sessionId.empty()) {
+      return Json(400, R"({"error":"missing_session_id"})");
+    }
+    if (sessionId != activeSessionId_) {
+      return Json(400, R"({"error":"session_mismatch"})");
+    }
+
+    const std::string linkId = "usb_" + std::to_string(NowMs());
+    {
+      std::lock_guard<std::mutex> lock(usbLinkMutex_);
+      usbLinkActive_ = true;
+      usbLinkId_ = linkId;
+      usbLinkSessionId_ = sessionId;
+      usbLinkDevicePath_ = devicePath;
+      usbLinkLastPacketMs_ = 0;
+      usbLinkRxPackets_ = 0;
+      usbLinkRxBytes_ = 0;
+      usbLinkExpectedSeq_ = 0;
+      usbLinkMtu_ = std::clamp<uint32_t>(mtu, 1024, 1U << 20);
+      usbLinkLastError_.clear();
+    }
+    std::ostringstream body;
+    body << "{\"ok\":true,\"linkId\":\"" << JsonEscape(linkId)
+         << "\",\"ackWindow\":64,\"mtu\":" << std::clamp<uint32_t>(mtu, 1024, 1U << 20) << "}";
+    return Json(200, body.str());
+  }
+
+  if (req.method == "POST" && req.path == "/api/v2/usb-native/packet") {
+    const std::string linkId = JsonField(req.body, "linkId", "");
+    const uint32_t seq = JsonFieldUInt(req.body, "seq", 0);
+    const uint32_t size = JsonFieldUInt(req.body, "size", 0);
+    if (linkId.empty()) {
+      return Json(400, R"({"error":"missing_link_id"})");
+    }
+
+    uint32_t expectedSeq = 0;
+    uint64_t rxPackets = 0;
+    uint64_t rxBytes = 0;
+    bool seqMismatch = false;
+    {
+      std::lock_guard<std::mutex> lock(usbLinkMutex_);
+      if (!usbLinkActive_ || linkId != usbLinkId_) {
+        return Json(400, R"({"error":"link_not_active"})");
+      }
+      expectedSeq = usbLinkExpectedSeq_;
+      if (seq != usbLinkExpectedSeq_) {
+        seqMismatch = true;
+        usbLinkLastError_ = "seq_mismatch";
+        usbLinkExpectedSeq_ = seq + 1;
+      } else {
+        usbLinkExpectedSeq_ += 1;
+        usbLinkLastError_.clear();
+      }
+      usbLinkLastPacketMs_ = NowMs();
+      usbLinkRxPackets_ += 1;
+      usbLinkRxBytes_ += size;
+      rxPackets = usbLinkRxPackets_;
+      rxBytes = usbLinkRxBytes_;
+      expectedSeq = usbLinkExpectedSeq_;
+    }
+
+    std::ostringstream body;
+    body << "{\"ok\":" << (seqMismatch ? "false" : "true")
+         << ",\"expectedSeq\":" << expectedSeq
+         << ",\"rxPackets\":" << rxPackets
+         << ",\"rxBytes\":" << rxBytes
+         << ",\"seqMismatch\":" << (seqMismatch ? "true" : "false")
+         << "}";
+    return Json(200, body.str());
+  }
+
   if (req.method == "GET" && req.path.rfind("/ws/v2/media", 0) == 0) {
     return Json(400, R"({"error":"websocket_upgrade_required","hint":"Use WebSocket client for /ws/v2/media"})");
   }
@@ -835,6 +1155,43 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
     if (transport == "usb-adb") {
       RunCommandHidden("adb reverse tcp:39393 tcp:39393");
       RunCommandHidden("adb forward tcp:39394 tcp:39394");
+    } else if (transport == "usb-native") {
+      const auto devices = EnumerateUsbNativeDevices();
+      const auto it = std::find_if(devices.begin(), devices.end(), [](const UsbNativeDevice& d) { return d.androidCandidate; });
+      {
+        std::lock_guard<std::mutex> lock(usbNativeMutex_);
+        usbNativeLastScanMs_ = NowMs();
+        if (it != devices.end()) {
+          usbNativeConnected_ = true;
+          usbNativeDevicePath_ = it->path;
+          usbNativeDescription_ = it->description;
+          usbNativeLastError_.clear();
+        } else {
+          usbNativeConnected_ = false;
+          usbNativeDevicePath_.clear();
+          usbNativeDescription_.clear();
+          usbNativeLastError_ = devices.empty() ? "no_usb_devices" : "no_android_candidate";
+        }
+      }
+      if (it == devices.end()) {
+        std::ostringstream err;
+        err << "{\"error\":\"usb_native_device_not_found\",\"hint\":\"check USB cable/mode or call /api/v2/usb-native/devices\","
+            << "\"deviceCount\":" << devices.size() << "}";
+        return Json(503, err.str());
+      }
+      {
+        std::lock_guard<std::mutex> lock(usbLinkMutex_);
+        usbLinkActive_ = false;
+        usbLinkId_.clear();
+        usbLinkSessionId_.clear();
+        usbLinkDevicePath_ = usbNativeDevicePath_;
+        usbLinkLastPacketMs_ = 0;
+        usbLinkRxPackets_ = 0;
+        usbLinkRxBytes_ = 0;
+        usbLinkExpectedSeq_ = 0;
+        usbLinkMtu_ = 16384;
+        usbLinkLastError_.clear();
+      }
     }
     activeTransport_ = transport;
     activeSessionId_ = "sess_v2_" + std::to_string(NowMs());
@@ -844,7 +1201,20 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
     body << "{\"sessionId\":\"" << JsonEscape(activeSessionId_)
          << "\",\"wsUrl\":\"ws://127.0.0.1:39393/ws/v2/media?sessionId=" << JsonEscape(activeSessionId_)
          << "\",\"authToken\":\"" << JsonEscape(activeAuthToken_)
-         << "\",\"recommendedAspect\":\"16:9\"}";
+         << "\",\"recommendedAspect\":\"16:9\"";
+    if (transport == "usb-native") {
+      std::lock_guard<std::mutex> lock(usbNativeMutex_);
+      body << ",\"usbNative\":{\"connected\":" << (usbNativeConnected_ ? "true" : "false")
+           << ",\"devicePath\":\"" << JsonEscape(usbNativeDevicePath_)
+           << "\",\"description\":\"" << JsonEscape(usbNativeDescription_)
+           << "\"}";
+    }
+    if (transport == "usb-native") {
+      std::lock_guard<std::mutex> lock(usbLinkMutex_);
+      body << ",\"usbLink\":{\"active\":" << (usbLinkActive_ ? "true" : "false")
+           << ",\"hint\":\"call /api/v2/usb-native/handshake\"}";
+    }
+    body << "}";
     return Json(200, body.str());
   }
 
@@ -861,10 +1231,24 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
   }
 
   if (req.method == "POST" && req.path == "/api/v2/session/stop") {
-    std::lock_guard<std::mutex> lock(frameMutex_);
-    frameState_.jpeg.clear();
-    frameState_.width = 0;
-    frameState_.height = 0;
+    {
+      std::lock_guard<std::mutex> lock(frameMutex_);
+      frameState_.jpeg.clear();
+      frameState_.width = 0;
+      frameState_.height = 0;
+    }
+    {
+      std::lock_guard<std::mutex> lock(usbLinkMutex_);
+      usbLinkActive_ = false;
+      usbLinkId_.clear();
+      usbLinkSessionId_.clear();
+      usbLinkDevicePath_.clear();
+      usbLinkLastPacketMs_ = 0;
+      usbLinkRxPackets_ = 0;
+      usbLinkRxBytes_ = 0;
+      usbLinkExpectedSeq_ = 0;
+      usbLinkLastError_.clear();
+    }
     return Json(200, R"({"ok":true})");
   }
 
@@ -1035,6 +1419,24 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
     const uint64_t now = NowMs();
     const bool alive = (lastMs != 0 && (now - lastMs) < 2000);
     const int fps = alive ? 30 : 0;
+    bool usbNativeConnected = false;
+    std::string usbNativeError;
+    bool usbLinkActive = false;
+    uint64_t usbLinkRxPackets = 0;
+    uint64_t usbLinkRxBytes = 0;
+    std::string usbLinkError;
+    {
+      std::lock_guard<std::mutex> lock(usbNativeMutex_);
+      usbNativeConnected = usbNativeConnected_;
+      usbNativeError = usbNativeLastError_;
+    }
+    {
+      std::lock_guard<std::mutex> lock(usbLinkMutex_);
+      usbLinkActive = usbLinkActive_;
+      usbLinkRxPackets = usbLinkRxPackets_;
+      usbLinkRxBytes = usbLinkRxBytes_;
+      usbLinkError = usbLinkLastError_;
+    }
 
     std::ostringstream body;
     body << "{\"sessionId\":\"" << JsonEscape(activeSessionId_)
@@ -1051,6 +1453,12 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
          << ",\"v2AudioFrames\":" << v2AudioFrames
          << ",\"v2Keyframes\":" << v2Keyframes
          << ",\"v2DecodedFrames\":" << v2DecodedFrames
+         << ",\"usbNativeConnected\":" << (usbNativeConnected ? "true" : "false")
+         << ",\"usbNativeLastError\":\"" << JsonEscape(usbNativeError) << "\""
+         << ",\"usbLinkActive\":" << (usbLinkActive ? "true" : "false")
+         << ",\"usbLinkRxPackets\":" << usbLinkRxPackets
+         << ",\"usbLinkRxBytes\":" << usbLinkRxBytes
+         << ",\"usbLinkLastError\":\"" << JsonEscape(usbLinkError) << "\""
          << "}";
     return Json(200, body.str());
   }

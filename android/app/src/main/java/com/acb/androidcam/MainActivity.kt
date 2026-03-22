@@ -3,6 +3,7 @@ package com.acb.androidcam
 import android.Manifest
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.Intent
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
@@ -25,6 +26,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var controller: CameraController
     private var isLandscapeLocked = false
     private var keepScreenOnWhileStreaming = true
+    private var backgroundStreamingEnabled = false
     private var controlsVisible = true
     private var isStreaming = false
 
@@ -41,6 +43,8 @@ class MainActivity : AppCompatActivity() {
             ?: prefs.getBoolean(KEY_LANDSCAPE_LOCKED, false)
         keepScreenOnWhileStreaming = savedInstanceState?.getBoolean(KEY_KEEP_SCREEN_ON)
             ?: prefs.getBoolean(KEY_KEEP_SCREEN_ON, true)
+        backgroundStreamingEnabled = savedInstanceState?.getBoolean(KEY_BACKGROUND_STREAMING)
+            ?: prefs.getBoolean(KEY_BACKGROUND_STREAMING, false)
         controlsVisible = savedInstanceState?.getBoolean(KEY_CONTROLS_VISIBLE)
             ?: prefs.getBoolean(KEY_CONTROLS_VISIBLE, true)
 
@@ -57,11 +61,12 @@ class MainActivity : AppCompatActivity() {
         val resolutionSpinner = findViewById<Spinner>(R.id.resolutionSpinner)
         val micCheckbox = findViewById<CheckBox>(R.id.micCheckbox)
         val sleepProtectionCheckbox = findViewById<CheckBox>(R.id.sleepProtectionCheckbox)
+        val backgroundStreamingCheckbox = findViewById<CheckBox>(R.id.backgroundStreamingCheckbox)
         val orientationButton = findViewById<Button>(R.id.orientationButton)
         val controlsPanel = findViewById<View>(R.id.controlsPanel)
         val toggleUiButton = findViewById<Button>(R.id.toggleUiButton)
 
-        val transportOptions = listOf("USB ADB", "Wi-Fi")
+        val transportOptions = listOf("USB ADB", "USB Native", "Wi-Fi")
         val resolutions = listOf(
             ResolutionPreset("640x480", 640, 480),
             ResolutionPreset("1280x720", 1280, 720),
@@ -74,6 +79,7 @@ class MainActivity : AppCompatActivity() {
         resolutionSpinner.setSelection(1)
         micCheckbox.isChecked = true
         sleepProtectionCheckbox.isChecked = keepScreenOnWhileStreaming
+        backgroundStreamingCheckbox.isChecked = backgroundStreamingEnabled
         updateOrientationButtonText(orientationButton)
         applyControlsVisibility(controlsPanel, toggleUiButton)
 
@@ -83,6 +89,11 @@ class MainActivity : AppCompatActivity() {
             keepScreenOnWhileStreaming = checked
             persistFlags()
             applyKeepScreenOnFlag()
+        }
+
+        backgroundStreamingCheckbox.setOnCheckedChangeListener { _, checked ->
+            backgroundStreamingEnabled = checked
+            persistFlags()
         }
 
         orientationButton.setOnClickListener {
@@ -101,33 +112,54 @@ class MainActivity : AppCompatActivity() {
         start.setOnClickListener {
             ensurePermissions()
 
-            val mode = if (transportSpinner.selectedItemPosition == 0) {
-                CameraController.TransportMode.USB_ADB
-            } else {
-                CameraController.TransportMode.LAN
+            val mode = when (transportSpinner.selectedItemPosition) {
+                0 -> CameraController.TransportMode.USB_ADB
+                1 -> CameraController.TransportMode.USB_NATIVE
+                else -> CameraController.TransportMode.LAN
             }
 
             val preset = resolutionSpinner.selectedItem as ResolutionPreset
             val receiver = hostInput.text.toString().ifBlank {
-                if (mode == CameraController.TransportMode.USB_ADB) "127.0.0.1:39393" else "192.168.1.100:39393"
+                when (mode) {
+                    CameraController.TransportMode.USB_ADB -> "127.0.0.1:39393"
+                    CameraController.TransportMode.USB_NATIVE -> "192.168.42.129:39393"
+                    CameraController.TransportMode.LAN -> "192.168.1.100:39393"
+                }
             }
 
-            controller.start(
-                transport = mode,
-                receiverAddress = receiver,
-                width = preset.width,
-                height = preset.height,
-                fps = 30,
-                bitrate = 5_000_000,
-                pushMic = micCheckbox.isChecked,
-            )
+            if (backgroundStreamingEnabled) {
+                controller.stop()
+                startBackgroundStreaming(
+                    transport = mode,
+                    receiver = receiver,
+                    width = preset.width,
+                    height = preset.height,
+                    pushMic = micCheckbox.isChecked,
+                )
+            } else {
+                stopBackgroundStreaming()
+                controller.start(
+                    transport = mode,
+                    receiverAddress = receiver,
+                    width = preset.width,
+                    height = preset.height,
+                    fps = 30,
+                    bitrate = 5_000_000,
+                    pushMic = micCheckbox.isChecked,
+                )
+            }
             isStreaming = true
             applyKeepScreenOnFlag()
-            status.text = getString(R.string.status_streaming, preset.label, receiver)
+            status.text = if (backgroundStreamingEnabled) {
+                getString(R.string.status_streaming_bg, preset.label, receiver)
+            } else {
+                getString(R.string.status_streaming, preset.label, receiver)
+            }
         }
 
         stop.setOnClickListener {
             controller.stop()
+            stopBackgroundStreaming()
             isStreaming = false
             applyKeepScreenOnFlag()
             status.text = getString(R.string.status_stopped)
@@ -142,6 +174,7 @@ class MainActivity : AppCompatActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean(KEY_LANDSCAPE_LOCKED, isLandscapeLocked)
         outState.putBoolean(KEY_KEEP_SCREEN_ON, keepScreenOnWhileStreaming)
+        outState.putBoolean(KEY_BACKGROUND_STREAMING, backgroundStreamingEnabled)
         outState.putBoolean(KEY_CONTROLS_VISIBLE, controlsVisible)
         super.onSaveInstanceState(outState)
     }
@@ -167,8 +200,43 @@ class MainActivity : AppCompatActivity() {
             .edit()
             .putBoolean(KEY_LANDSCAPE_LOCKED, isLandscapeLocked)
             .putBoolean(KEY_KEEP_SCREEN_ON, keepScreenOnWhileStreaming)
+            .putBoolean(KEY_BACKGROUND_STREAMING, backgroundStreamingEnabled)
             .putBoolean(KEY_CONTROLS_VISIBLE, controlsVisible)
             .apply()
+    }
+
+    private fun startBackgroundStreaming(
+        transport: CameraController.TransportMode,
+        receiver: String,
+        width: Int,
+        height: Int,
+        pushMic: Boolean,
+    ) {
+        val intent = Intent(this, StreamingService::class.java).apply {
+            action = StreamingService.ACTION_START
+            putExtra(
+                StreamingService.EXTRA_TRANSPORT,
+                when (transport) {
+                    CameraController.TransportMode.LAN -> "lan"
+                    CameraController.TransportMode.USB_NATIVE -> "usb-native"
+                    CameraController.TransportMode.USB_ADB -> "usb-adb"
+                },
+            )
+            putExtra(StreamingService.EXTRA_RECEIVER, receiver)
+            putExtra(StreamingService.EXTRA_WIDTH, width)
+            putExtra(StreamingService.EXTRA_HEIGHT, height)
+            putExtra(StreamingService.EXTRA_FPS, 30)
+            putExtra(StreamingService.EXTRA_BITRATE, 5_000_000)
+            putExtra(StreamingService.EXTRA_PUSH_MIC, pushMic)
+        }
+        ContextCompat.startForegroundService(this, intent)
+    }
+
+    private fun stopBackgroundStreaming() {
+        val intent = Intent(this, StreamingService::class.java).apply {
+            action = StreamingService.ACTION_STOP
+        }
+        startService(intent)
     }
 
     private fun applyControlsVisibility(panel: View, toggleButton: Button) {
@@ -201,6 +269,7 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS_NAME = "acb_main"
         private const val KEY_LANDSCAPE_LOCKED = "landscape_locked"
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
+        private const val KEY_BACKGROUND_STREAMING = "background_streaming"
         private const val KEY_CONTROLS_VISIBLE = "controls_visible"
     }
 }
