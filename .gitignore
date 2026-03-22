@@ -32,6 +32,7 @@ android/.idea/
 android/local.properties
 *.apk
 *.aab
+.kotlin/
 
 # .NET / WinUI
 **/bin/
