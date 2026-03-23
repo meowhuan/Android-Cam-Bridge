@@ -28,10 +28,10 @@ class UsbAccessoryTransport(
     }
 
     private val connected = AtomicBoolean(false)
-    private var accessory: UsbAccessory? = null
-    private var fileDescriptor: ParcelFileDescriptor? = null
-    private var outputStream: FileOutputStream? = null
-    private var inputStream: FileInputStream? = null
+    @Volatile private var accessory: UsbAccessory? = null
+    @Volatile private var fileDescriptor: ParcelFileDescriptor? = null
+    @Volatile private var outputStream: FileOutputStream? = null
+    @Volatile private var inputStream: FileInputStream? = null
     private var writeThread: Thread? = null
     private var keepaliveThread: Thread? = null
     private val writeQueue = LinkedBlockingQueue<ByteArray>(WRITE_QUEUE_CAPACITY)
@@ -45,13 +45,8 @@ class UsbAccessoryTransport(
         Log.i(TAG, msg)
     }
 
-    /**
-     * Open the USB accessory and start the write + keepalive threads.
-     * Returns true on success, false if the accessory could not be opened.
-     */
     fun open(accessory: UsbAccessory): Boolean {
-        close() // release any previous connection first
-        closeOnce.set(false)
+        close()
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
         val pfd: ParcelFileDescriptor? = try {
             usbManager.openAccessory(accessory)
@@ -85,12 +80,6 @@ class UsbAccessoryTransport(
         return true
     }
 
-    /**
-     * Enqueue a v2 media packet for transmission over USB.
-     * The packet is wrapped in an 8-byte framing envelope before being written.
-     *
-     * @param v2Packet the complete v2 packet (24-byte header + payload)
-     */
     fun sendFrame(v2Packet: ByteArray) {
         if (!connected.get()) return
         if (v2Packet.size > MAX_FRAME_SIZE) {
@@ -104,14 +93,6 @@ class UsbAccessoryTransport(
         }
     }
 
-    /**
-     * Build the 8-byte framing envelope around a v2 packet.
-     *
-     * Layout:
-     *   [4 bytes: magic 0x41 0x43 0x42 0x01]
-     *   [4 bytes: frame_length LE uint32 = v2Packet.size]
-     *   [v2Packet bytes]
-     */
     private fun buildEnvelope(v2Packet: ByteArray): ByteArray {
         val envelope = ByteArray(8 + v2Packet.size)
         val header = ByteBuffer.wrap(envelope).order(ByteOrder.LITTLE_ENDIAN)
@@ -121,9 +102,6 @@ class UsbAccessoryTransport(
         return envelope
     }
 
-    /**
-     * Write thread: drains the write queue and writes frames to the USB output stream.
-     */
     private fun writeLoop() {
         Log.d(TAG, "writeLoop started")
         try {
@@ -140,23 +118,17 @@ class UsbAccessoryTransport(
                         emit("Write error: ${e.message}")
                     }
                     connected.set(false)
-                    running.set(false)
                     break
                 }
             }
-        } catch (e: InterruptedException) {
+        } catch (_: InterruptedException) {
             Log.d(TAG, "writeLoop interrupted")
-        } finally {
-            Log.d(TAG, "writeLoop exiting")
-            closeResources()
+        } catch (_: Throwable) {
+            // Catch any native crash fallout (e.g. closed FD)
         }
+        Log.d(TAG, "writeLoop exiting")
     }
 
-    /**
-     * Keepalive thread: sends periodic keepalive frames when the link is idle.
-     * A keepalive is a v2 header-only packet with streamType=3 (meta), codec=0,
-     * flags=0, and payloadSize=0.
-     */
     private fun keepaliveLoop() {
         Log.d(TAG, "keepaliveLoop started")
         try {
@@ -180,71 +152,55 @@ class UsbAccessoryTransport(
                     val frame = buildEnvelope(keepalivePacket)
                     if (writeQueue.offer(frame)) {
                         lastSendTimeMs.set(System.currentTimeMillis())
-                    } else {
-                        Log.w(TAG, "keepaliveLoop: queue full, skipping keepalive")
                     }
                 }
             }
         } catch (_: InterruptedException) {
-            Log.d(TAG, "keepaliveLoop interrupted")
+        } catch (_: Throwable) {
         }
         Log.d(TAG, "keepaliveLoop exiting")
     }
 
-    /**
-     * Close the transport, stopping threads and releasing all resources.
-     */
     fun close() {
-        running.set(false)
+        if (!running.compareAndSet(true, false)) return
         connected.set(false)
 
+        // Step 1: drain write queue so poll() exits quickly
+        writeQueue.clear()
+
+        // Step 2: close the PFD FIRST to unblock any thread stuck in write()/read().
+        // This causes IOException in writeLoop, which exits the loop cleanly.
+        // We must NOT join threads before closing the FD, because write() on a USB
+        // bulk pipe is not interruptible — interrupt() won't unblock it, and join()
+        // would time out, then closing the FD from the caller while write() is still
+        // running causes a native crash (SIGPIPE/SIGSEGV).
+        val pfd = fileDescriptor
+        fileDescriptor = null
+        try { pfd?.close() } catch (_: Throwable) {}
+
+        // Step 3: now join threads (they should exit quickly after FD close)
         writeThread?.let { thread ->
-            if (thread.isAlive) {
-                thread.interrupt()
-                try {
-                    thread.join(2000)
-                } catch (_: InterruptedException) {
-                }
-            }
+            thread.interrupt()
+            try { thread.join(3000) } catch (_: InterruptedException) {}
         }
         writeThread = null
 
         keepaliveThread?.let { thread ->
-            if (thread.isAlive) {
-                thread.interrupt()
-                try {
-                    thread.join(2000)
-                } catch (_: InterruptedException) {
-                }
-            }
+            thread.interrupt()
+            try { thread.join(1000) } catch (_: InterruptedException) {}
         }
         keepaliveThread = null
 
-        closeResources()
-        emit("USB accessory transport closed")
-    }
-
-    private val closeOnce = AtomicBoolean(false)
-
-    /**
-     * Release underlying I/O resources (streams + file descriptor).
-     */
-    private fun closeResources() {
-        if (!closeOnce.compareAndSet(false, true)) return
-        try { outputStream?.close() } catch (_: IOException) {}
-        try { inputStream?.close() } catch (_: IOException) {}
-        try { fileDescriptor?.close() } catch (_: IOException) {}
+        // Step 4: clean up remaining references
         outputStream = null
         inputStream = null
-        fileDescriptor = null
         accessory = null
+
+        emit("USB accessory transport closed")
     }
 
     fun isConnected(): Boolean = connected.get()
 
-    /**
-     * Returns transport statistics as (txFrames, txBytes, queuedFrames).
-     */
     fun getStats(): Triple<Long, Long, Long> =
         Triple(txFrames.get(), txBytes.get(), writeQueue.size.toLong())
 }
