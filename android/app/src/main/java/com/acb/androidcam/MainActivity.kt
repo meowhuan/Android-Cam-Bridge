@@ -245,7 +245,7 @@ class MainActivity : AppCompatActivity() {
                     width = preset.width,
                     height = preset.height,
                     fps = selectedFps,
-                    bitrate = 5_000_000,
+                    bitrate = computeBitrate(preset.width, selectedFps),
                     pushMic = micCheckbox.isChecked,
                 )
             }
@@ -360,7 +360,7 @@ class MainActivity : AppCompatActivity() {
             putExtra(StreamingService.EXTRA_WIDTH, width)
             putExtra(StreamingService.EXTRA_HEIGHT, height)
             putExtra(StreamingService.EXTRA_FPS, selectedFps)
-            putExtra(StreamingService.EXTRA_BITRATE, 5_000_000)
+            putExtra(StreamingService.EXTRA_BITRATE, computeBitrate(width, selectedFps))
             putExtra(StreamingService.EXTRA_PUSH_MIC, pushMic)
         }
         ContextCompat.startForegroundService(this, intent)
@@ -485,6 +485,12 @@ class MainActivity : AppCompatActivity() {
         if (needCamera || needAudio) {
             permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
         }
+    }
+
+    private fun computeBitrate(width: Int, fps: Int): Int = when {
+        width >= 1920 -> if (fps >= 60) 15_000_000 else 10_000_000
+        width >= 1280 -> if (fps >= 60)  8_000_000 else  5_000_000
+        else          -> if (fps >= 60)  3_000_000 else  2_000_000
     }
 
     companion object {

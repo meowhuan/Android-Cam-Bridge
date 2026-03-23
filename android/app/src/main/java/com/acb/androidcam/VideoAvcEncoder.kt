@@ -26,6 +26,13 @@ class VideoAvcEncoder(
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                setInteger(MediaFormat.KEY_LATENCY, 1)
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 31) {
+                setInteger(MediaFormat.KEY_ALLOW_FRAME_DROP, 0)
+            }
         }
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         codec.start()
@@ -125,22 +132,29 @@ class VideoAvcEncoder(
         val cropLeft = crop.left.coerceAtLeast(0)
         val cropTop = crop.top.coerceAtLeast(0)
 
-        // Y plane
-        val srcYPlane = src.planes[0]
-        val dstYPlane = dst.planes[0]
-        val srcYBuf = srcYPlane.buffer
-        val dstYBuf = dstYPlane.buffer
-        for (row in 0 until height) {
-            val srcRowBase = (cropTop + row) * srcYPlane.rowStride
-            val dstRowBase = row * dstYPlane.rowStride
-            for (col in 0 until width) {
-                val srcPos = srcRowBase + (cropLeft + col) * srcYPlane.pixelStride
-                val dstPos = dstRowBase + col * dstYPlane.pixelStride
-                dstYBuf.put(dstPos, srcYBuf.get(srcPos.coerceIn(0, srcYBuf.limit() - 1)))
+        // Y plane — pixelStride is always 1, use row-based bulk copy
+        run {
+            val srcP = src.planes[0]
+            val dstP = dst.planes[0]
+            val srcBuf = srcP.buffer
+            val dstBuf = dstP.buffer
+            val rowBytes = ByteArray(width)
+            for (row in 0 until height) {
+                val srcPos = (cropTop + row) * srcP.rowStride + cropLeft
+                if (srcPos + width <= srcBuf.limit()) {
+                    srcBuf.position(srcPos)
+                    srcBuf.get(rowBytes)
+                } else {
+                    for (col in 0 until width) {
+                        rowBytes[col] = srcBuf.get((srcPos + col).coerceAtMost(srcBuf.limit() - 1))
+                    }
+                }
+                dstBuf.position(row * dstP.rowStride)
+                dstBuf.put(rowBytes)
             }
         }
 
-        // U and V planes — destination pixelStride handles NV12 vs I420 automatically
+        // U and V planes — per-pixel for correct NV12/I420 handling
         val halfW = width / 2
         val halfH = height / 2
         val uvLeft = cropLeft / 2
@@ -157,7 +171,7 @@ class VideoAvcEncoder(
                 for (col in 0 until halfW) {
                     val srcPos = srcRowBase + (uvLeft + col) * srcPlane.pixelStride
                     val dstPos = dstRowBase + col * dstPlane.pixelStride
-                    dstBuf.put(dstPos, srcBuf.get(srcPos.coerceIn(0, srcBuf.limit() - 1)))
+                    dstBuf.put(dstPos, srcBuf.get(srcPos.coerceAtMost(srcBuf.limit() - 1)))
                 }
             }
         }

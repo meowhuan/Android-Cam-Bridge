@@ -13,6 +13,8 @@ import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.util.Log
+import android.util.Range
+import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -104,10 +106,18 @@ class CameraController(
             val provider = providerFuture.get()
 
             @Suppress("DEPRECATION")
-            val analysis = ImageAnalysis.Builder()
+            val analysisBuilder = ImageAnalysis.Builder()
                 .setTargetResolution(android.util.Size(width, height))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
+
+            @androidx.camera.camera2.interop.ExperimentalCamera2Interop
+            Camera2Interop.Extender(analysisBuilder)
+                .setCaptureRequestOption(
+                    android.hardware.camera2.CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
+                    Range(fps, fps)
+                )
+
+            val analysis = analysisBuilder.build()
 
             val rotation = previewView?.display?.rotation ?: android.view.Surface.ROTATION_0
             analysis.targetRotation = rotation
