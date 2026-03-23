@@ -151,6 +151,10 @@ class MainActivity : AppCompatActivity() {
         registerReceiver(usbPermissionReceiver, IntentFilter(ACTION_USB_PERMISSION),
             Context.RECEIVER_NOT_EXPORTED)
 
+        // Register receiver for ADB-triggered AOA mode entry
+        registerReceiver(aoaEntryReceiver, IntentFilter(ACTION_ENTER_AOA),
+            Context.RECEIVER_EXPORTED)
+
         if (intent?.action == UsbManager.ACTION_USB_ACCESSORY_ATTACHED) {
             handleUsbAccessoryIntent(intent)
         }
@@ -274,6 +278,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         usbAccessoryTransport?.close()
         try { unregisterReceiver(usbPermissionReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(aoaEntryReceiver) } catch (_: Exception) {}
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
@@ -418,6 +423,27 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Receiver for ADB-triggered AOA mode: Windows sends this broadcast via
+    // "adb shell am broadcast" when it can't open the device directly (driver lock).
+    // We check if a USB accessory is already available and open it.
+    private val aoaEntryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == ACTION_ENTER_AOA) {
+                Log.i("MainActivity", "Received ACTION_ENTER_AOA from ADB")
+                val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
+                val accessories = usbManager.accessoryList
+                if (accessories != null && accessories.isNotEmpty()) {
+                    handleUsbAccessoryIntent(android.content.Intent().apply {
+                        putExtra(UsbManager.EXTRA_ACCESSORY, accessories[0])
+                    })
+                } else {
+                    Log.w("MainActivity", "No USB accessory available for AOA entry")
+                }
+            }
+        }
+    }
+    }
+
     private fun handleUsbAccessoryIntent(intent: Intent) {
         val accessory: UsbAccessory? = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY, UsbAccessory::class.java)
@@ -464,6 +490,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val ACTION_USB_PERMISSION = "com.acb.androidcam.USB_PERMISSION"
+        const val ACTION_ENTER_AOA = "com.acb.androidcam.ACTION_ENTER_AOA"
         private const val PREFS_NAME = "acb_main"
         private const val KEY_LANDSCAPE_LOCKED = "landscape_locked"
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"

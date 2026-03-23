@@ -194,6 +194,37 @@ std::vector<EnumDevice> EnumerateUsbDevices() {
   return out;
 }
 
+// Run a hidden process and wait for it, return true if exit code == 0.
+bool RunHidden(const wchar_t* cmdLine, int timeoutMs = 5000) {
+  STARTUPINFOW si{};
+  si.cb = sizeof(si);
+  si.dwFlags = STARTF_USESHOWWINDOW;
+  si.wShowWindow = SW_HIDE;
+  PROCESS_INFORMATION pi{};
+  std::wstring cmd(cmdLine);
+  BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+                           CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+  if (!ok) return false;
+  WaitForSingleObject(pi.hProcess, static_cast<DWORD>(timeoutMs));
+  DWORD exitCode = 1;
+  GetExitCodeProcess(pi.hProcess, &exitCode);
+  CloseHandle(pi.hProcess);
+  CloseHandle(pi.hThread);
+  return exitCode == 0;
+}
+
+// Fallback: use ADB to trigger Android-side AOA mode entry.
+// Sends a broadcast that the ACB app listens for.
+bool TryAoaViaAdb() {
+  std::cerr << "[AOA] Device locked by driver, trying ADB fallback...\n";
+  if (RunHidden(L"adb shell am broadcast -a com.acb.androidcam.ACTION_ENTER_AOA")) {
+    std::cerr << "[AOA] ADB broadcast sent, waiting for AOA re-enumeration\n";
+    return true;
+  }
+  std::cerr << "[AOA] ADB fallback failed (adb not available or broadcast failed)\n";
+  return false;
+}
+
 bool SendAoaControlTransfer(WINUSB_INTERFACE_HANDLE hWinUsb,
                             uint8_t request,
                             uint16_t index,
@@ -322,6 +353,20 @@ bool UsbAoaTransport::StartHandshake(const std::wstring& targetDevicePath) {
         nullptr);
     if (hDev == INVALID_HANDLE_VALUE) {
       DWORD err = ::GetLastError();
+      if (err == ERROR_ACCESS_DENIED || err == ERROR_SHARING_VIOLATION) {
+        // Device is locked by ADB/MTP driver. Try ADB fallback to make
+        // Android enter AOA mode from its side, then wait for re-enumeration.
+        std::cerr << "[AOA] Device locked (error=" << err
+                  << "), trying ADB fallback\n";
+        if (TryAoaViaAdb()) {
+          // Skip WinUSB handshake steps — Android will re-enumerate as AOA
+          goto wait_for_aoa;
+        }
+        SetError("device locked by another driver (error=" + std::to_string(err)
+                 + "). Try: 1) use Zadig to install WinUSB driver, or "
+                 "2) ensure ADB is available for fallback");
+        return false;
+      }
       SetError("CreateFileW failed on candidate, error=" + std::to_string(err));
       return false;
     }
@@ -378,6 +423,7 @@ bool UsbAoaTransport::StartHandshake(const std::wstring& targetDevicePath) {
     CloseHandle(hDev);
 
     // Step 9 - poll for AOA device re-enumeration (up to 8 seconds)
+    wait_for_aoa:
     constexpr int kPollIntervalMs = 250;
     constexpr int kPollTimeoutMs = 8000;
     int elapsed = 0;
