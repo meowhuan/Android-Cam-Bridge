@@ -27,6 +27,9 @@ class VideoAvcEncoder(
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
             setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+            if (android.os.Build.VERSION.SDK_INT >= 23) {
+                setInteger(MediaFormat.KEY_PRIORITY, 0) // 0 = real-time
+            }
             if (android.os.Build.VERSION.SDK_INT >= 30) {
                 setInteger(MediaFormat.KEY_LATENCY, 1)
             }

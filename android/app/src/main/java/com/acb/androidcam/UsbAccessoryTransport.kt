@@ -24,7 +24,7 @@ class UsbAccessoryTransport(
         private val MAGIC = byteArrayOf(0x41, 0x43, 0x42, 0x01)
         private const val MAX_FRAME_SIZE = 2 * 1024 * 1024
         private const val KEEPALIVE_INTERVAL_MS = 500L
-        private const val WRITE_QUEUE_CAPACITY = 256
+        private const val WRITE_QUEUE_CAPACITY = 3
     }
 
     private val connected = AtomicBoolean(false)
@@ -106,10 +106,12 @@ class UsbAccessoryTransport(
         Log.d(TAG, "writeLoop started")
         try {
             while (running.get()) {
-                val frame = writeQueue.poll(100, TimeUnit.MILLISECONDS) ?: continue
+                val frame = writeQueue.poll(5, TimeUnit.MILLISECONDS) ?: continue
                 try {
                     outputStream?.write(frame)
-                    outputStream?.flush()
+                    // No flush() — USB bulk pipe commits data automatically on
+                    // microframe boundaries. Explicit flush() forces a synchronous
+                    // round-trip to the USB controller, adding 1-5ms per frame.
                     txFrames.incrementAndGet()
                     txBytes.addAndGet(frame.size.toLong())
                     lastSendTimeMs.set(System.currentTimeMillis())

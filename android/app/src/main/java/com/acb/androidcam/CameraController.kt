@@ -128,11 +128,11 @@ class CameraController(
                 }
 
                 try {
-                    val cropRect = normalizedCropRect(imageProxy.cropRect, imageProxy.width, imageProxy.height)
-                    val jpeg = imageProxyToJpeg(imageProxy, cropRect)
-                    val w = cropRect.width()
-                    val h = cropRect.height()
                     if (shouldPushLegacyHttp()) {
+                        val cropRect = normalizedCropRect(imageProxy.cropRect, imageProxy.width, imageProxy.height)
+                        val jpeg = imageProxyToJpeg(imageProxy, cropRect)
+                        val w = cropRect.width()
+                        val h = cropRect.height()
                         uploadExecutor.execute {
                             postFrame(jpeg, w, h)
                         }

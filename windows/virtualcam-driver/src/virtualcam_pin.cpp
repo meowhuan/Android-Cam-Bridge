@@ -863,8 +863,8 @@ void VirtualCamPin::ThreadProc() {
 
         ++frameNumber;
 
-        // Wait to maintain ~30fps, but respond to stop event
-        if (WaitForSingleObject(stopEvent_, 33) == WAIT_OBJECT_0) {
+        // Poll shared memory more frequently to reduce display latency
+        if (WaitForSingleObject(stopEvent_, 16) == WAIT_OBJECT_0) {
             break;
         }
     }
