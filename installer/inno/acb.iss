@@ -38,6 +38,7 @@ Name: "extras\usbdriver"; Description: "AOA WinUSB Driver Files"; Types: full cu
 [Tasks]
 Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "Additional icons:"; Components: core\gui
 Name: "desktopuninstall"; Description: "Create desktop uninstall shortcut"; GroupDescription: "Additional icons:"
+Name: "installaoacert"; Description: "Install AOA test certificate now"; GroupDescription: "Device setup:"; Components: extras\usbdriver
 Name: "installaoadriver"; Description: "Install AOA WinUSB driver now"; GroupDescription: "Device setup:"; Components: extras\usbdriver
 
 [InstallDelete]
@@ -53,6 +54,8 @@ Source: "..\..\dist\acb-win-x64\obs-plugin\locale\zh-CN.ini"; DestDir: "{code:Ge
 Source: "..\..\dist\acb-win-x64\virtualcam-bridge\acb-virtualcam-bridge.exe"; DestDir: "{app}\virtualcam-bridge"; Flags: ignoreversion; Components: extras\virtualcam
 Source: "..\..\dist\acb-win-x64\virtualcam-driver\acb-virtualcam.dll"; DestDir: "{app}\virtualcam-driver"; Flags: ignoreversion regserver; Components: extras\virtualcam
 Source: "..\..\dist\acb-win-x64\drivers\aoa-winusb\acb-aoa.inf"; DestDir: "{app}\drivers\aoa-winusb"; Flags: ignoreversion; Components: extras\usbdriver
+Source: "..\..\dist\acb-win-x64\drivers\aoa-winusb\acb-aoa.cat"; DestDir: "{app}\drivers\aoa-winusb"; Flags: ignoreversion skipifsourcedoesntexist; Components: extras\usbdriver
+Source: "..\..\dist\acb-win-x64\drivers\aoa-winusb\acb-aoa.cer"; DestDir: "{app}\drivers\aoa-winusb"; Flags: ignoreversion skipifsourcedoesntexist; Components: extras\usbdriver
 Source: "..\..\dist\acb-win-x64\drivers\aoa-winusb\install-driver.ps1"; DestDir: "{app}\drivers\aoa-winusb"; Flags: ignoreversion; Components: extras\usbdriver
 
 [Icons]
@@ -63,6 +66,8 @@ Name: "{autodesktop}\Uninstall ACB"; Filename: "{uninstallexe}"; Tasks: desktopu
 
 [Run]
 Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; Flags: runhidden waituntilterminated; Check: NeedInstallVCRedist; Components: core\gui
+Filename: "{sys}\certutil.exe"; Parameters: "-addstore -f Root ""{app}\drivers\aoa-winusb\acb-aoa.cer"""; StatusMsg: "Installing AOA test certificate to LocalMachine\\Root..."; Flags: runhidden waituntilterminated; Components: extras\usbdriver; Tasks: installaoacert; Check: AoaCertExists
+Filename: "{sys}\certutil.exe"; Parameters: "-addstore -f TrustedPublisher ""{app}\drivers\aoa-winusb\acb-aoa.cer"""; StatusMsg: "Installing AOA test certificate to LocalMachine\\TrustedPublisher..."; Flags: runhidden waituntilterminated; Components: extras\usbdriver; Tasks: installaoacert; Check: AoaCertExists
 Filename: "{sys}\pnputil.exe"; Parameters: "/add-driver ""{app}\drivers\aoa-winusb\acb-aoa.inf"" /install"; StatusMsg: "Installing AOA WinUSB driver..."; Flags: runhidden waituntilterminated; Components: extras\usbdriver; Tasks: installaoadriver
 Filename: "{app}\gui\Acb.Gui.exe"; Description: "Launch ACB GUI"; Flags: nowait postinstall skipifsilent; Components: core\gui
 
@@ -166,5 +171,10 @@ begin
   if RegQueryDWordValue(HKLM, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Installed', Installed) then
     if Installed = 1 then
       Result := False;
+end;
+
+function AoaCertExists: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\drivers\aoa-winusb\acb-aoa.cer'));
 end;
 

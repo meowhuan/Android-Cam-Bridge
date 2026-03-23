@@ -55,3 +55,8 @@ android/local.properties
 *.cache
 *.bak
 *.backup
+
+# Local test-signed driver artifacts
+drivers/aoa-winusb/*.cat
+drivers/aoa-winusb/*.cer
+drivers/aoa-winusb/*.pfx

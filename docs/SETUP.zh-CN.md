@@ -74,6 +74,13 @@ adb reverse tcp:39393 tcp:39393
 pwsh .\drivers\aoa-winusb\install-driver.ps1
 ```
 
+如果 Windows 因“缺少数字签名”拒绝安装，先生成测试签名：
+
+```powershell
+pwsh .\scripts\sign-aoa-driver.ps1 -CertStoreScope CurrentUser
+bcdedit /set testsigning on
+```
+
 然后在 GUI 中：
 
 1. 选择 `USB（AOA 直连）`

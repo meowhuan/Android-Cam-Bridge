@@ -133,6 +133,25 @@ adb reverse tcp:39393 tcp:39393
 pwsh .\drivers\aoa-winusb\install-driver.ps1
 ```
 
+如果 `pnputil` 提示“第三方 INF 不包含数字签名信息”，先生成测试签名：
+
+```powershell
+pwsh .\scripts\sign-aoa-driver.ps1 -CertStoreScope CurrentUser
+```
+
+说明：
+
+- 脚本会优先使用 WDK 的 `Inf2Cat.exe`
+- 如果本机没有 WDK，可改用 `-UseMakeCatFallback` 做开发态兜底
+
+然后在测试机开启：
+
+```powershell
+bcdedit /set testsigning on
+```
+
+重启后再安装驱动。
+
 3. 打开 GUI，选择 `USB (AOA Direct)`
 4. 点击 `AOA Connect`
 5. 启动 v2 会话
@@ -206,6 +225,11 @@ pwsh .\scripts\package.ps1 -Version 0.2.4
 - `drivers/aoa-winusb/`
 - `prereqs/`
 
+如果你已经执行过 `scripts/sign-aoa-driver.ps1`，payload 还会额外带上：
+
+- `drivers/aoa-winusb/acb-aoa.cat`
+- `drivers/aoa-winusb/acb-aoa.cer`
+
 ### 生成安装器
 
 ```powershell
@@ -225,6 +249,7 @@ pwsh .\scripts\build-installer.ps1 -Version 0.2.4
 其中：
 
 - 选择虚拟摄像头组件时，安装器会自动注册 `acb-virtualcam.dll`
+- 如果 payload 里带了 `acb-aoa.cer`，安装器可在提权后把测试证书导入 `LocalMachine\Root` 和 `LocalMachine\TrustedPublisher`
 - 选择 AOA 驱动组件后，可在安装向导里勾选“立即安装 AOA WinUSB 驱动”
 - 如需手动处理，仍可按文档执行 `regsvr32` 与 `pnputil/install-driver.ps1`
 
@@ -239,6 +264,11 @@ CI/Release 现在会校验这些新增产物是否进入 payload：
 - `virtualcam-driver/acb-virtualcam.dll`
 - `drivers/aoa-winusb/acb-aoa.inf`
 - `drivers/aoa-winusb/install-driver.ps1`
+
+如果仓库配置了 `AOA_TEST_CERT_PFX_BASE64`、`AOA_TEST_CERT_PASSWORD`（以及可选的 `AOA_TEST_CERT_CER_BASE64`），CI/Release 还会自动生成并打包：
+
+- `drivers/aoa-winusb/acb-aoa.cat`
+- `drivers/aoa-winusb/acb-aoa.cer`
 
 ## 文档导航
 

@@ -150,8 +150,7 @@ $virtualcamDriverSrc = Require-BuildFile -Root $buildDir -Name "acb-virtualcam.d
 
 $obsEnSrc = Join-Path $repoRoot "windows\obs-plugin\data\locale\en-US.ini"
 $obsZhSrc = Join-Path $repoRoot "windows\obs-plugin\data\locale\zh-CN.ini"
-$aoaDriverInfSrc = Join-Path $repoRoot "drivers\aoa-winusb\acb-aoa.inf"
-$aoaDriverInstallSrc = Join-Path $repoRoot "drivers\aoa-winusb\install-driver.ps1"
+$aoaDriverDir = Join-Path $repoRoot "drivers\aoa-winusb"
 $guiPublishDir = Join-Path $repoRoot "windows\gui\Acb.Gui\bin\Release\net10.0-windows10.0.19041.0\win-x64\publish"
 
 if (-not (Test-Path $guiPublishDir)) {
@@ -177,8 +176,7 @@ Copy-Item $receiverSrc (Join-Path $receiverOut "acb-receiver.exe") -Force
 Copy-Item (Join-Path $guiPublishDir "*") $guiOut -Recurse -Force
 Copy-Item $virtualcamBridgeSrc (Join-Path $virtualcamBridgeOut "acb-virtualcam-bridge.exe") -Force
 Copy-Item $virtualcamDriverSrc (Join-Path $virtualcamDriverOut "acb-virtualcam.dll") -Force
-Copy-Item $aoaDriverInfSrc (Join-Path $aoaDriverOut "acb-aoa.inf") -Force
-Copy-Item $aoaDriverInstallSrc (Join-Path $aoaDriverOut "install-driver.ps1") -Force
+Copy-Item (Join-Path $aoaDriverDir "*") $aoaDriverOut -Recurse -Force
 
 if ($hasRealObsPlugin) {
   if (-not (Test-Path $stagedObsDll)) {
@@ -215,6 +213,12 @@ if ($hasRealObsPlugin) {
     "obs-plugin\locale\en-US.ini",
     "obs-plugin\locale\zh-CN.ini"
   )
+}
+if (Test-Path (Join-Path $aoaDriverOut "acb-aoa.cat")) {
+  $files += "drivers\aoa-winusb\acb-aoa.cat"
+}
+if (Test-Path (Join-Path $aoaDriverOut "acb-aoa.cer")) {
+  $files += "drivers\aoa-winusb\acb-aoa.cer"
 }
 
 $meta = [ordered]@{

@@ -74,6 +74,13 @@ Install the bundled WinUSB driver first:
 pwsh .\drivers\aoa-winusb\install-driver.ps1
 ```
 
+If Windows rejects the INF as unsigned, generate a test-signed catalog first:
+
+```powershell
+pwsh .\scripts\sign-aoa-driver.ps1 -CertStoreScope CurrentUser
+bcdedit /set testsigning on
+```
+
 Then in GUI:
 
 1. Select `USB (AOA Direct)`

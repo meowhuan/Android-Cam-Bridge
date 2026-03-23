@@ -7,6 +7,7 @@ Class       = USBDevice
 ClassGUID   = {88BAE032-5A81-49f0-BC3D-A4FF138216D6}
 Provider    = %ManufacturerName%
 DriverVer   = 03/23/2026,1.0.0.0
+CatalogFile = acb-aoa.cat
 PnpLockDown = 1
 
 [DestinationDirs]

@@ -4,7 +4,8 @@ param(
   [string]$ObsIncludeDir = "",
   [string]$ObsGeneratedIncludeDir = "",
   [string]$ObsLibDir = "",
-  [bool]$RequireRealObsPlugin = $false
+  [bool]$RequireRealObsPlugin = $false,
+  [switch]$SkipPackage
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,27 +26,31 @@ function Resolve-Iscc {
   return $null
 }
 
-Write-Host "Step 1/2: Build package payload"
-$packageArgs = @(
-  "-NoProfile",
-  "-ExecutionPolicy", "Bypass",
-  "-File", (Join-Path $PSScriptRoot "package.ps1"),
-  "-Version", $Version,
-  "-OutDir", $payloadOut,
-  "-RequireRealObsPlugin:$RequireRealObsPlugin"
-)
-if ($ObsIncludeDir) {
-  $packageArgs += @("-ObsIncludeDir", $ObsIncludeDir)
-}
-if ($ObsGeneratedIncludeDir) {
-  $packageArgs += @("-ObsGeneratedIncludeDir", $ObsGeneratedIncludeDir)
-}
-if ($ObsLibDir) {
-  $packageArgs += @("-ObsLibDir", $ObsLibDir)
-}
-pwsh @packageArgs
-if ($LASTEXITCODE -ne 0) {
-  throw "Package step failed."
+if (-not $SkipPackage) {
+  Write-Host "Step 1/2: Build package payload"
+  $packageArgs = @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-File", (Join-Path $PSScriptRoot "package.ps1"),
+    "-Version", $Version,
+    "-OutDir", $payloadOut,
+    "-RequireRealObsPlugin:$RequireRealObsPlugin"
+  )
+  if ($ObsIncludeDir) {
+    $packageArgs += @("-ObsIncludeDir", $ObsIncludeDir)
+  }
+  if ($ObsGeneratedIncludeDir) {
+    $packageArgs += @("-ObsGeneratedIncludeDir", $ObsGeneratedIncludeDir)
+  }
+  if ($ObsLibDir) {
+    $packageArgs += @("-ObsLibDir", $ObsLibDir)
+  }
+  pwsh @packageArgs
+  if ($LASTEXITCODE -ne 0) {
+    throw "Package step failed."
+  }
+} else {
+  Write-Host "Step 1/2: Reusing existing package payload"
 }
 
 $required = @(

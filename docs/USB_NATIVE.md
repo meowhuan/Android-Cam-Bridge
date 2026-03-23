@@ -76,6 +76,36 @@ pwsh .\drivers\aoa-winusb\install-driver.ps1
 
 如果设备已连接，安装后通常需要重新插拔一次。
 
+如果 Windows 提示 INF 缺少数字签名，先在开发机生成测试签名：
+
+```powershell
+pwsh .\scripts\sign-aoa-driver.ps1 -CertStoreScope CurrentUser
+```
+
+该脚本会：
+
+- 优先使用 WDK 的 `Inf2Cat.exe` 生成 catalog
+- 未安装 WDK 时可用 `-UseMakeCatFallback` 走开发态兜底
+- 基于 `acb-aoa.inf` 生成 `acb-aoa.cat`
+- 创建测试代码签名证书
+- 导出 `acb-aoa.cer`
+- 对 `acb-aoa.cat` 进行签名
+
+随后需要在测试机启用：
+
+```powershell
+bcdedit /set testsigning on
+```
+
+重启后再执行 `install-driver.ps1`。
+
+如果使用 ACB 的 Inno 安装器，并且 payload 已包含 `acb-aoa.cer`，也可以直接在安装向导中勾选：
+
+- `Install AOA test certificate now`
+- `Install AOA WinUSB driver now`
+
+安装器会在管理员权限下先导入测试证书，再执行 `pnputil`。
+
 ### 测试步骤
 
 1. 启动 Receiver。
@@ -121,5 +151,7 @@ GET /api/v2/usb-aoa/status
 优先检查：
 
 - 是否已安装 `drivers/aoa-winusb/acb-aoa.inf`
+- 是否已经生成并安装对应的 `acb-aoa.cat` / 测试证书
+- 测试机是否已开启 `TESTSIGNING`
 - 是否重新插拔设备
 - 设备当前是否已经切换到 accessory 模式

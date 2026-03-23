@@ -89,6 +89,49 @@ jobs:
         shell: pwsh
         run: ./scripts/build.ps1 -Config Release -ObsIncludeDir "$env:OBS_INCLUDE_DIR" -ObsGeneratedIncludeDir "$env:OBS_GENERATED_INCLUDE_DIR" -ObsLibDir "$env:OBS_LIB_DIR"
 
+      - name: Prepare AOA test driver signing assets
+        id: aoa_sign
+        shell: pwsh
+        env:
+          AOA_TEST_CERT_PFX_BASE64: ${{ secrets.AOA_TEST_CERT_PFX_BASE64 }}
+          AOA_TEST_CERT_PASSWORD: ${{ secrets.AOA_TEST_CERT_PASSWORD }}
+          AOA_TEST_CERT_CER_BASE64: ${{ secrets.AOA_TEST_CERT_CER_BASE64 }}
+        run: |
+          $hasPfx = -not [string]::IsNullOrWhiteSpace($env:AOA_TEST_CERT_PFX_BASE64)
+          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:AOA_TEST_CERT_PASSWORD)
+          if (-not ($hasPfx -and $hasPassword)) {
+            "signed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            Write-Host "AOA driver signing skipped: missing AOA_TEST_CERT_PFX_BASE64 or AOA_TEST_CERT_PASSWORD."
+            return
+          }
+
+          $pfxPath = Join-Path $env:RUNNER_TEMP "acb-aoa-test.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:AOA_TEST_CERT_PFX_BASE64))
+
+          $cerArg = @()
+          if (-not [string]::IsNullOrWhiteSpace($env:AOA_TEST_CERT_CER_BASE64)) {
+            $cerPath = Join-Path $env:RUNNER_TEMP "acb-aoa-test.cer"
+            [IO.File]::WriteAllBytes($cerPath, [Convert]::FromBase64String($env:AOA_TEST_CERT_CER_BASE64))
+            $cerArg = @("-ExistingCerPath", $cerPath)
+          }
+
+          $args = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", ".\scripts\sign-aoa-driver.ps1",
+            "-ExistingPfxPath", $pfxPath,
+            "-PfxPassword", $env:AOA_TEST_CERT_PASSWORD,
+            "-InstallCertificate:`$false",
+            "-UseMakeCatFallback"
+          ) + $cerArg
+
+          pwsh @args
+          if ($LASTEXITCODE -ne 0) {
+            throw "AOA driver signing failed."
+          }
+
+          "signed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Build Android debug APK
         shell: pwsh
         working-directory: ./android
@@ -106,6 +149,14 @@ jobs:
             throw "OBS plugin mode is '$($pkg.obsPluginBuildMode)' not 'real'."
           }
 
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer from prepared payload
+        shell: pwsh
+        run: ./scripts/build-installer.ps1 -Version "0.0.0-ci" -SkipPackage
+
 
       - name: Validate payload files
         shell: pwsh
@@ -119,6 +170,12 @@ jobs:
             "dist/acb-win-x64/drivers/aoa-winusb/install-driver.ps1",
             "dist/acb-win-x64/prereqs/vc_redist.x64.exe"
           )
+          if ("${{ steps.aoa_sign.outputs.signed }}" -eq "true") {
+            $required += @(
+              "dist/acb-win-x64/drivers/aoa-winusb/acb-aoa.cat",
+              "dist/acb-win-x64/drivers/aoa-winusb/acb-aoa.cer"
+            )
+          }
           foreach ($item in $required) {
             if (-not (Test-Path $item)) {
               Write-Host "Missing payload item: $item"
@@ -128,11 +185,21 @@ jobs:
               throw "Payload validation failed."
             }
           }
+          if (-not (Test-Path "dist/installer/ACB-Setup-0.0.0-ci.exe")) {
+            throw "CI installer missing: dist/installer/ACB-Setup-0.0.0-ci.exe"
+          }
       - name: Upload Windows payload
         uses: actions/upload-artifact@v4
         with:
           name: acb-win-x64-ci
           path: dist/acb-win-x64/**
+          if-no-files-found: error
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: acb-installer-ci
+          path: dist/installer/ACB-Setup-0.0.0-ci.exe
           if-no-files-found: error
 
       - name: Upload Android APK
@@ -141,7 +208,6 @@ jobs:
           name: acb-android-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-
 
 
 

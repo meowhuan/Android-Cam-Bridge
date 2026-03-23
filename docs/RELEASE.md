@@ -36,9 +36,15 @@
 - `dist/acb-win-x64/drivers/aoa-winusb/acb-aoa.inf`
 - `dist/acb-win-x64/drivers/aoa-winusb/install-driver.ps1`
 
+如果配置了 AOA 测试证书 secrets，CI 还会生成并校验：
+
+- `dist/acb-win-x64/drivers/aoa-winusb/acb-aoa.cat`
+- `dist/acb-win-x64/drivers/aoa-winusb/acb-aoa.cer`
+
 CI 上传物：
 
 - `acb-win-x64-ci`
+- `acb-installer-ci`
 - `acb-android-debug-apk`
 
 ## `release.yml`
@@ -69,6 +75,16 @@ CI 上传物：
 - `*.asc`（启用 GPG 时）
 
 其中新增的 AOA/VirtualCam 文件会进入 `ACB-win-x64-<version>.zip`。
+
+### Optional AOA test driver signing secrets
+
+To let CI/Release bundle the AOA test certificate and signed catalog, configure:
+
+- `AOA_TEST_CERT_PFX_BASE64`
+- `AOA_TEST_CERT_PASSWORD`
+- `AOA_TEST_CERT_CER_BASE64` (optional but recommended)
+
+With these secrets present, workflow will run `scripts/sign-aoa-driver.ps1` before packaging.
 
 ## 发布步骤
 
