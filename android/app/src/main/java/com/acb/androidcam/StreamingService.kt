@@ -11,10 +11,10 @@ import androidx.lifecycle.LifecycleService
 
 class StreamingService : LifecycleService() {
     private var controller: CameraController? = null
-    private var running = false
+    @Volatile private var running = false
     private var reconnectCount = 0
     private var monitorThread: Thread? = null
-    private var stopMonitor = false
+    @Volatile private var stopMonitor = false
     private var lastReconnectAttemptAtMs = 0L
 
     private var cfgTransport: String = "usb-adb"
@@ -78,6 +78,7 @@ class StreamingService : LifecycleService() {
             transport = when (cfgTransport) {
                 "lan" -> CameraController.TransportMode.LAN
                 "usb-native" -> CameraController.TransportMode.USB_NATIVE
+                "usb-aoa" -> CameraController.TransportMode.USB_AOA
                 else -> CameraController.TransportMode.USB_ADB
             },
             receiverAddress = cfgReceiver,

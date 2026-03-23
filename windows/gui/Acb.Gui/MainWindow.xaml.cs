@@ -20,9 +20,11 @@ public sealed partial class MainWindow : Window
     private readonly ReceiverApiClient _client = new();
     private readonly DispatcherTimer _statsTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private readonly DispatcherTimer _usbNativeTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+    private readonly DispatcherTimer _usbAoaTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private bool _autoRefreshEnabled;
     private bool _usbNativeRefreshInProgress;
     private int _usbNativeTickCount;
+    private bool _usbAoaRefreshInProgress;
     private Process? _receiverProcess;
     private bool _receiverStartedByGui;
     private bool _uiInitialized;
@@ -34,6 +36,8 @@ public sealed partial class MainWindow : Window
         _statsTimer.Tick += OnStatsTimerTick;
         _usbNativeTimer.Tick += OnUsbNativeTimerTick;
         _usbNativeTimer.Start();
+        _usbAoaTimer.Tick += OnUsbAoaTimerTick;
+        _usbAoaTimer.Start();
         Closed += OnWindowClosed;
         _uiInitialized = true;
         ApplyLanguage();
@@ -53,6 +57,15 @@ public sealed partial class MainWindow : Window
                         ? "USB Native 模式不需要 ADB 映射，请直接确保手机可通过 USB 网络访问 Receiver。"
                         : "USB Native mode does not use ADB mapping. Ensure phone can reach Receiver over USB networking.",
                     "usb-native");
+                return;
+            }
+            if (transport == "usb-aoa")
+            {
+                AppendOutput(
+                    IsZh()
+                        ? "USB AOA 模式不需要 ADB 映射，请直接使用 AOA 连接。"
+                        : "USB AOA mode does not use ADB mapping. Use AOA Connect instead.",
+                    "usb-aoa");
                 return;
             }
             AppendOutput(await _client.SetupAdbAsync(), "adb setup");
@@ -114,6 +127,16 @@ public sealed partial class MainWindow : Window
                         : "USB Native selected: skipping ADB setup and starting session with transport=usb-native.",
                     "usb-native");
             }
+            else if (transport == "usb-aoa")
+            {
+                AppendOutput(
+                    IsZh()
+                        ? "USB AOA 已选：跳过 ADB 配置，先建立 AOA 连接再发起会话。"
+                        : "USB AOA selected: skipping ADB setup, establishing AOA connection before starting session.",
+                    "usb-aoa");
+                var aoaResp = await _client.UsbAoaConnectAsync();
+                AppendOutput(aoaResp, "usb-aoa connect");
+            }
 
             var options = new StartSessionOptions
             {
@@ -137,6 +160,10 @@ public sealed partial class MainWindow : Window
             if (transport == "usb-native")
             {
                 await RefreshUsbNativeStatusAndLinkAsync();
+            }
+            if (transport == "usb-aoa")
+            {
+                await RefreshUsbAoaStatusAsync();
             }
         }
         catch (Exception ex)
@@ -270,13 +297,53 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void OnUsbAoaConnect(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await EnsureReceiverReadyAsync();
+            var result = await _client.UsbAoaConnectAsync();
+            AppendOutput(result, "usb-aoa connect");
+            AppLogger.Info("usb-aoa connect requested");
+            await RefreshUsbAoaStatusAsync();
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("usb-aoa connect failed", ex);
+            AppendError(ex);
+        }
+    }
+
+    private async void OnUsbAoaDisconnect(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await EnsureReceiverReadyAsync();
+            var result = await _client.UsbAoaDisconnectAsync();
+            AppendOutput(result, "usb-aoa disconnect");
+            AppLogger.Info("usb-aoa disconnect requested");
+            await RefreshUsbAoaStatusAsync();
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("usb-aoa disconnect failed", ex);
+            AppendError(ex);
+        }
+    }
+
     private async void OnTransportChanged(object sender, SelectionChangedEventArgs e)
     {
         UpdateUsbNativePanelVisibility();
-        if (GetComboValue(TransportBox, "usb-adb") == "usb-native")
+        UpdateUsbAoaPanelVisibility();
+        var transport = GetComboValue(TransportBox, "usb-adb");
+        if (transport == "usb-native")
         {
             await RefreshUsbNativeDevicesAsync(false);
             await RefreshUsbNativeStatusAndLinkAsync(false);
+        }
+        else if (transport == "usb-aoa")
+        {
+            await RefreshUsbAoaStatusAsync(false);
         }
     }
 
@@ -290,6 +357,13 @@ public sealed partial class MainWindow : Window
         {
             await RefreshUsbNativeDevicesAsync(false);
         }
+    }
+
+    private async void OnUsbAoaTimerTick(object? sender, object e)
+    {
+        if (_usbAoaRefreshInProgress) return;
+        if (GetComboValue(TransportBox, "usb-adb") != "usb-aoa") return;
+        await RefreshUsbAoaStatusAsync(false);
     }
 
     private static string GetComboValue(ComboBox box, string fallback)
@@ -331,6 +405,7 @@ public sealed partial class MainWindow : Window
         {
             _statsTimer.Stop();
             _usbNativeTimer.Stop();
+            _usbAoaTimer.Stop();
             if ((AutoStopReceiverBox.IsChecked ?? true) && _receiverStartedByGui && _receiverProcess is { HasExited: false })
             {
                 _receiverProcess.Kill(true);
@@ -442,17 +517,20 @@ public sealed partial class MainWindow : Window
         FpsLabelText.Text = "FPS";
         BitrateLabelText.Text = zh ? "视频码率" : "Bitrate";
         UsbNativePanelTitleText.Text = zh ? "USB Native 面板" : "USB Native Panel";
+        UsbAoaPanelTitleText.Text = zh ? "USB AOA 面板" : "USB AOA Panel";
         ReceiverAddressBox.PlaceholderText = zh ? "Receiver 地址" : "receiver address";
         BitrateBox.PlaceholderText = zh ? "视频码率 bps" : "video bitrate bps";
         SessionIdBox.PlaceholderText = "session id";
         UsbNativeSelectedDeviceBox.PlaceholderText = zh ? "已选设备路径" : "selected device path";
         UsbNativeStatusBox.PlaceholderText = zh ? "usb-native 状态" : "usb-native status";
         UsbNativeLinkBox.PlaceholderText = zh ? "usb-native 链路" : "usb-native link";
+        UsbAoaStatusBox.PlaceholderText = zh ? "usb-aoa 状态" : "usb-aoa status";
 
         ConnectionModeManagedItem.Content = zh ? "托管（自动）" : "Managed";
         ConnectionModeAttachItem.Content = zh ? "附加（仅连接）" : "Attach";
         TransportUsbItem.Content = zh ? "USB（ADB）" : "USB (ADB)";
         TransportUsbNativeItem.Content = zh ? "USB（Native）" : "USB (Native)";
+        TransportUsbAoaItem.Content = zh ? "USB（AOA 直连）" : "USB (AOA Direct)";
         TransportLanItem.Content = zh ? "无线局域网" : "LAN (Wi-Fi)";
         QualityBalancedItem.Content = zh ? "均衡" : "Balanced";
         QualityHighItem.Content = zh ? "高质量" : "High";
@@ -471,10 +549,13 @@ public sealed partial class MainWindow : Window
         RefreshUsbNativeDevicesButton.Content = zh ? "刷新 USB 设备" : "Refresh USB Devices";
         UsbNativeHandshakeButton.Content = zh ? "执行握手" : "Handshake";
         RefreshUsbNativeLinkButton.Content = zh ? "刷新链路" : "Refresh Link";
+        UsbAoaConnectButton.Content = zh ? "AOA 连接" : "AOA Connect";
+        UsbAoaDisconnectButton.Content = zh ? "AOA 断开" : "AOA Disconnect";
         AutoRefreshButton.Content = _autoRefreshEnabled
             ? (zh ? "关闭自动刷新（5秒）" : "Disable Auto Refresh (5s)")
             : (zh ? "开启自动刷新（5秒）" : "Auto Refresh Stats (5s)");
         UpdateUsbNativePanelVisibility();
+        UpdateUsbAoaPanelVisibility();
     }
 
     private void OnLanguageChanged(object sender, SelectionChangedEventArgs e)
@@ -548,6 +629,13 @@ public sealed partial class MainWindow : Window
             : Visibility.Collapsed;
     }
 
+    private void UpdateUsbAoaPanelVisibility()
+    {
+        UsbAoaPanel.Visibility = GetComboValue(TransportBox, "usb-adb") == "usb-aoa"
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
     private async Task RefreshUsbNativeDevicesAsync(bool appendOutput)
     {
         try
@@ -593,6 +681,30 @@ public sealed partial class MainWindow : Window
         finally
         {
             _usbNativeRefreshInProgress = false;
+        }
+    }
+
+    private async Task RefreshUsbAoaStatusAsync(bool appendOutput = false)
+    {
+        try
+        {
+            _usbAoaRefreshInProgress = true;
+            await EnsureReceiverReadyAsync();
+            var statusJson = await _client.GetUsbAoaStatusAsync();
+            UsbAoaStatusBox.Text = statusJson;
+            if (appendOutput)
+            {
+                AppendOutput(statusJson, "usb-aoa status");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("refresh usb-aoa status failed", ex);
+            if (appendOutput) AppendError(ex);
+        }
+        finally
+        {
+            _usbAoaRefreshInProgress = false;
         }
     }
 

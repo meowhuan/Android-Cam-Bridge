@@ -1,14 +1,18 @@
 package com.acb.androidcam
 
 import android.Manifest
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.hardware.usb.UsbAccessory
+import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.view.WindowManager
 import android.widget.ArrayAdapter
@@ -36,6 +40,8 @@ data class FpsPreset(val label: String, val fps: Int) {
 
 class MainActivity : AppCompatActivity() {
     private lateinit var controller: CameraController
+    private var usbAccessoryTransport: UsbAccessoryTransport? = null
+    private var pendingAccessory: UsbAccessory? = null
     private var isLandscapeLocked = false
     private var keepScreenOnWhileStreaming = true
     private var backgroundStreamingEnabled = false
@@ -114,7 +120,7 @@ class MainActivity : AppCompatActivity() {
         val debugOverlayCloseButton = findViewById<Button?>(R.id.debugOverlayCloseButton)
         val debugOverlayClearButton = findViewById<Button?>(R.id.debugOverlayClearButton)
 
-        val transportOptions = listOf("USB ADB", "USB Native", "Wi-Fi")
+        val transportOptions = listOf("USB ADB", "USB Native", "USB AOA", "Wi-Fi")
         val resolutions = listOf(
             ResolutionPreset("640x480", 640, 480),
             ResolutionPreset("1280x720", 1280, 720),
@@ -141,6 +147,13 @@ class MainActivity : AppCompatActivity() {
         applyDebugModeUi()
 
         ensurePermissions()
+
+        registerReceiver(usbPermissionReceiver, IntentFilter(ACTION_USB_PERMISSION),
+            Context.RECEIVER_NOT_EXPORTED)
+
+        if (intent?.action == UsbManager.ACTION_USB_ACCESSORY_ATTACHED) {
+            handleUsbAccessoryIntent(intent)
+        }
 
         sleepProtectionCheckbox.setOnCheckedChangeListener { _, checked ->
             keepScreenOnWhileStreaming = checked
@@ -189,6 +202,7 @@ class MainActivity : AppCompatActivity() {
             val mode = when (transportSpinner.selectedItemPosition) {
                 0 -> CameraController.TransportMode.USB_ADB
                 1 -> CameraController.TransportMode.USB_NATIVE
+                2 -> CameraController.TransportMode.USB_AOA
                 else -> CameraController.TransportMode.LAN
             }
 
@@ -200,6 +214,7 @@ class MainActivity : AppCompatActivity() {
                 when (mode) {
                     CameraController.TransportMode.USB_ADB -> "127.0.0.1:39393"
                     CameraController.TransportMode.USB_NATIVE -> ""
+                    CameraController.TransportMode.USB_AOA -> ""
                     CameraController.TransportMode.LAN -> "192.168.1.100:39393"
                 }
             }
@@ -248,8 +263,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == UsbManager.ACTION_USB_ACCESSORY_ATTACHED) {
+            handleUsbAccessoryIntent(intent)
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        usbAccessoryTransport?.close()
+        try { unregisterReceiver(usbPermissionReceiver) } catch (_: Exception) {}
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
@@ -324,6 +348,7 @@ class MainActivity : AppCompatActivity() {
                     CameraController.TransportMode.LAN -> "lan"
                     CameraController.TransportMode.USB_NATIVE -> "usb-native"
                     CameraController.TransportMode.USB_ADB -> "usb-adb"
+                    CameraController.TransportMode.USB_AOA -> "usb-aoa"
                 },
             )
             putExtra(StreamingService.EXTRA_RECEIVER, receiver)
@@ -374,6 +399,60 @@ class MainActivity : AppCompatActivity() {
         debugOverlayView?.visibility = if (debugModeEnabled) View.VISIBLE else View.GONE
     }
 
+    private val usbPermissionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == ACTION_USB_PERMISSION) {
+                val accessory: UsbAccessory? = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY, UsbAccessory::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY)
+                }
+                val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                if (granted && accessory != null) {
+                    openUsbAccessory(accessory)
+                } else {
+                    Log.w("MainActivity", "USB accessory permission denied")
+                }
+            }
+        }
+    }
+
+    private fun handleUsbAccessoryIntent(intent: Intent) {
+        val accessory: UsbAccessory? = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY, UsbAccessory::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY)
+        }
+        if (accessory == null) return
+        val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
+        if (usbManager.hasPermission(accessory)) {
+            openUsbAccessory(accessory)
+        } else {
+            pendingAccessory = accessory
+            val pi = PendingIntent.getBroadcast(this, 0,
+                Intent(ACTION_USB_PERMISSION), PendingIntent.FLAG_IMMUTABLE)
+            usbManager.requestPermission(accessory, pi)
+        }
+    }
+
+    private fun openUsbAccessory(accessory: UsbAccessory) {
+        usbAccessoryTransport?.close()
+        val transport = UsbAccessoryTransport(this) { msg ->
+            runOnUiThread {
+                appendDebugLogLine(msg)
+            }
+        }
+        if (transport.open(accessory)) {
+            usbAccessoryTransport = transport
+            controller.attachUsbAccessoryTransport(transport)
+            Log.i("MainActivity", "USB AOA accessory opened successfully")
+        } else {
+            Log.e("MainActivity", "Failed to open USB accessory")
+        }
+    }
+
     private fun ensurePermissions() {
         val needCamera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
         val needAudio = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
@@ -384,6 +463,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val ACTION_USB_PERMISSION = "com.acb.androidcam.USB_PERMISSION"
         private const val PREFS_NAME = "acb_main"
         private const val KEY_LANDSCAPE_LOCKED = "landscape_locked"
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
