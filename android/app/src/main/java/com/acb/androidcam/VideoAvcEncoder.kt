@@ -34,19 +34,26 @@ class VideoAvcEncoder(
     fun encode(image: ImageProxy, onEncoded: (ByteArray, Boolean) -> Unit) {
         val input = codec.dequeueInputBuffer(0)
         if (input >= 0) {
-            val inBuf = codec.getInputBuffer(input)
-            if (inBuf != null) {
-                val i420 = imageToI420(image)
-                inBuf.clear()
-                if (inBuf.capacity() >= i420.size) {
-                    inBuf.put(i420)
-                    val ptsUs = (++frameIndex) * 1_000_000L / fpsValue.toLong()
-                    codec.queueInputBuffer(input, 0, i420.size, ptsUs, 0)
+            val codecImage = try { codec.getInputImage(input) } catch (_: Throwable) { null }
+            if (codecImage != null) {
+                fillCodecImage(image, codecImage)
+                val ptsUs = (++frameIndex) * 1_000_000L / fpsValue.toLong()
+                codec.queueInputBuffer(input, 0, width * height * 3 / 2, ptsUs, 0)
+            } else {
+                val inBuf = codec.getInputBuffer(input)
+                if (inBuf != null) {
+                    val i420 = imageToI420(image)
+                    inBuf.clear()
+                    if (inBuf.capacity() >= i420.size) {
+                        inBuf.put(i420)
+                        val ptsUs = (++frameIndex) * 1_000_000L / fpsValue.toLong()
+                        codec.queueInputBuffer(input, 0, i420.size, ptsUs, 0)
+                    } else {
+                        codec.queueInputBuffer(input, 0, 0, 0, 0)
+                    }
                 } else {
                     codec.queueInputBuffer(input, 0, 0, 0, 0)
                 }
-            } else {
-                codec.queueInputBuffer(input, 0, 0, 0, 0)
             }
         }
 
@@ -107,6 +114,53 @@ class VideoAvcEncoder(
             ((cfg[2].toInt() and 0xFF) shl 8) or
             (cfg[3].toInt() and 0xFF)
         return naluLen in 1 until cfg.size
+    }
+
+    /**
+     * Copy YUV planes from camera ImageProxy into the codec's input Image,
+     * respecting the destination plane layout (NV12/I420/etc.) automatically.
+     */
+    private fun fillCodecImage(src: ImageProxy, dst: android.media.Image) {
+        val crop = src.cropRect
+        val cropLeft = crop.left.coerceAtLeast(0)
+        val cropTop = crop.top.coerceAtLeast(0)
+
+        // Y plane
+        val srcYPlane = src.planes[0]
+        val dstYPlane = dst.planes[0]
+        val srcYBuf = srcYPlane.buffer
+        val dstYBuf = dstYPlane.buffer
+        for (row in 0 until height) {
+            val srcRowBase = (cropTop + row) * srcYPlane.rowStride
+            val dstRowBase = row * dstYPlane.rowStride
+            for (col in 0 until width) {
+                val srcPos = srcRowBase + (cropLeft + col) * srcYPlane.pixelStride
+                val dstPos = dstRowBase + col * dstYPlane.pixelStride
+                dstYBuf.put(dstPos, srcYBuf.get(srcPos.coerceIn(0, srcYBuf.limit() - 1)))
+            }
+        }
+
+        // U and V planes — destination pixelStride handles NV12 vs I420 automatically
+        val halfW = width / 2
+        val halfH = height / 2
+        val uvLeft = cropLeft / 2
+        val uvTop = cropTop / 2
+
+        for (planeIdx in 1..2) {
+            val srcPlane = src.planes[planeIdx]
+            val dstPlane = dst.planes[planeIdx]
+            val srcBuf = srcPlane.buffer
+            val dstBuf = dstPlane.buffer
+            for (row in 0 until halfH) {
+                val srcRowBase = (uvTop + row) * srcPlane.rowStride
+                val dstRowBase = row * dstPlane.rowStride
+                for (col in 0 until halfW) {
+                    val srcPos = srcRowBase + (uvLeft + col) * srcPlane.pixelStride
+                    val dstPos = dstRowBase + col * dstPlane.pixelStride
+                    dstBuf.put(dstPos, srcBuf.get(srcPos.coerceIn(0, srcBuf.limit() - 1)))
+                }
+            }
+        }
     }
 
     private fun imageToI420(image: ImageProxy): ByteArray {
