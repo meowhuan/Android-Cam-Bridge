@@ -614,9 +614,15 @@ void NV12ToBGRA(const uint8_t* nv12,
   if (uvStride <= 0) uvStride = yStride;
   const uint8_t* yPlane = nv12;
   const uint8_t* uvPlane = nv12 + static_cast<size_t>(yStride) * static_cast<size_t>(height);
-  const size_t yPlaneSize = static_cast<size_t>(width) * static_cast<size_t>(height);
-  outBgra->resize(yPlaneSize * 4);
+  const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+  outBgra->resize(pixelCount * 4);
 
+  // BT.709 limited-range YCbCr -> RGB (correct for HD content from Android MediaCodec)
+  // Y' = [16, 235], Cb/Cr = [16, 240], centered at 128
+  // R = 1.164*(Y-16)                + 1.793*(Cr-128)
+  // G = 1.164*(Y-16) - 0.213*(Cb-128) - 0.533*(Cr-128)
+  // B = 1.164*(Y-16) + 2.112*(Cb-128)
+  // Fixed-point: multiply by 256 and shift right 8
   for (uint32_t y = 0; y < height; ++y) {
     for (uint32_t x = 0; x < width; ++x) {
       const int yv = static_cast<int>(yPlane[static_cast<size_t>(y) * yStride + x]);
@@ -625,11 +631,10 @@ void NV12ToBGRA(const uint8_t* nv12,
       const int v = static_cast<int>(uvPlane[uvIndex + 1]) - 128;
 
       const int c = yv - 16;
-      const int d = u;
-      const int e = v;
-      const int r = (298 * c + 409 * e + 128) >> 8;
-      const int g = (298 * c - 100 * d - 208 * e + 128) >> 8;
-      const int b = (298 * c + 516 * d + 128) >> 8;
+      // BT.709 coefficients (fixed-point *256)
+      const int r = (298 * c + 459 * v + 128) >> 8;
+      const int g = (298 * c -  55 * u - 136 * v + 128) >> 8;
+      const int b = (298 * c + 541 * u + 128) >> 8;
 
       const size_t out = (static_cast<size_t>(y) * width + x) * 4;
       (*outBgra)[out + 0] = ClampU8(b);
@@ -756,7 +761,11 @@ class H264MftDecoder {
           DWORD srcLen = 0;
           if (SUCCEEDED(contiguous->Lock(&src, &srcMax, &srcLen))) {
             if (width_ > 0 && height_ > 0 && srcLen >= width_ * height_ * 3 / 2) {
-              NV12ToBGRA(src, width_, height_, static_cast<int>(width_), static_cast<int>(width_), outBgra);
+              // Compute actual stride: for NV12 the total buffer = yStride*height*3/2
+              // Solve: stride = srcLen / (height * 3/2) = srcLen * 2 / (height * 3)
+              int actualStride = static_cast<int>(srcLen * 2 / (height_ * 3));
+              if (actualStride < static_cast<int>(width_)) actualStride = static_cast<int>(width_);
+              NV12ToBGRA(src, width_, height_, actualStride, actualStride, outBgra);
               *outW = width_;
               *outH = height_;
               gotFrame = true;
