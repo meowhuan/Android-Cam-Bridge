@@ -1,6 +1,5 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <initguid.h>
 #include <objbase.h>
 #include <strmif.h>
 #include <uuids.h>
@@ -9,6 +8,9 @@
 #include <ksproxy.h>
 #include <new>
 
+// Define our own CLSID here (initguid.h must NOT be included globally
+// because uuids.h and strmiids.lib already provide DirectShow GUIDs).
+#include <initguid.h>
 #include "guids.h"
 #include "virtualcam_filter.h"
 
