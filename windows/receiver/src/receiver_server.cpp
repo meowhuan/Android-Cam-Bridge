@@ -1,10 +1,12 @@
 #include "receiver_server.h"
-#include "usb_aoa_transport.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+
+#include "usb_aoa_transport.h"
+
 #include <setupapi.h>
 #include <initguid.h>
 #include <usbiodef.h>
