@@ -442,7 +442,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-    }
 
     private fun handleUsbAccessoryIntent(intent: Intent) {
         val accessory: UsbAccessory? = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
