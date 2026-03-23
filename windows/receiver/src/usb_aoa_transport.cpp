@@ -469,29 +469,63 @@ bool UsbAoaTransport::StartHandshake(const std::wstring& targetDevicePath) {
 
 open_aoa_device:
   {
-    // Step 10 - open the AOA device
+    // Step 10 - open the AOA device with retry.
+    // After re-enumeration, Windows may take a few seconds to bind the
+    // WinUSB driver. Retry CreateFileW + WinUsb_Initialize with backoff.
     std::cerr << "[AOA] Opening AOA device: " << aoaDev->pathUtf8 << "\n";
 
-    hDevice_ = CreateFileW(
-        aoaDev->path.c_str(),
-        GENERIC_READ | GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,
-        nullptr, OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
-        nullptr);
-    if (hDevice_ == INVALID_HANDLE_VALUE) {
-      DWORD err = ::GetLastError();
-      SetError("CreateFileW failed on AOA device, error="
-               + std::to_string(err));
-      return false;
+    constexpr int kOpenRetries = 8;
+    constexpr int kOpenRetryMs = 500;
+    bool opened = false;
+
+    for (int attempt = 0; attempt < kOpenRetries; ++attempt) {
+      if (attempt > 0) {
+        std::cerr << "[AOA] Retry " << attempt << "/" << kOpenRetries
+                  << " in " << kOpenRetryMs << "ms...\n";
+        std::this_thread::sleep_for(std::chrono::milliseconds(kOpenRetryMs));
+        // Re-enumerate to get fresh device path (driver rebind can change it)
+        auto freshDevices = EnumerateUsbDevices();
+        aoaDev = nullptr;
+        for (const auto& d : freshDevices) {
+          if (IsAoaDevice(d.pathUtf8)) {
+            devices = std::move(freshDevices);
+            for (const auto& dd : devices) {
+              if (IsAoaDevice(dd.pathUtf8)) { aoaDev = &dd; break; }
+            }
+            break;
+          }
+        }
+        if (!aoaDev) continue;
+      }
+
+      hDevice_ = CreateFileW(
+          aoaDev->path.c_str(),
+          GENERIC_READ | GENERIC_WRITE,
+          FILE_SHARE_READ | FILE_SHARE_WRITE,
+          nullptr, OPEN_EXISTING,
+          FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
+          nullptr);
+      if (hDevice_ == INVALID_HANDLE_VALUE) {
+        std::cerr << "[AOA] CreateFileW failed, error=" << ::GetLastError() << "\n";
+        continue;
+      }
+
+      if (!WinUsb_Initialize(hDevice_, &hWinUsb_)) {
+        DWORD err = ::GetLastError();
+        std::cerr << "[AOA] WinUsb_Initialize failed, error=" << err << "\n";
+        CloseHandle(hDevice_);
+        hDevice_ = INVALID_HANDLE_VALUE;
+        continue;
+      }
+
+      opened = true;
+      std::cerr << "[AOA] Device opened on attempt " << (attempt + 1) << "\n";
+      break;
     }
 
-    if (!WinUsb_Initialize(hDevice_, &hWinUsb_)) {
-      DWORD err = ::GetLastError();
-      CloseHandle(hDevice_);
-      hDevice_ = INVALID_HANDLE_VALUE;
-      SetError("WinUsb_Initialize failed on AOA device, error="
-               + std::to_string(err));
+    if (!opened) {
+      SetError("failed to open AOA device after " + std::to_string(kOpenRetries)
+               + " attempts. Install WinUSB driver: run drivers/aoa-winusb/install-driver.ps1 as Admin");
       return false;
     }
 
