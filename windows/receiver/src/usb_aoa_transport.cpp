@@ -237,10 +237,20 @@ bool SendAoaControlTransfer(WINUSB_INTERFACE_HANDLE hWinUsb,
   pkt.Index = index;
   pkt.Length = length;
 
+  // WinUSB requires the data buffer to be in writable (non-const) memory
+  // because the kernel locks the pages for DMA. String literals live in
+  // the read-only .rdata section, so we must copy to a heap buffer.
+  std::vector<UCHAR> buf;
+  UCHAR* bufPtr = nullptr;
+  if (data && length > 0) {
+    buf.assign(static_cast<const UCHAR*>(data),
+               static_cast<const UCHAR*>(data) + length);
+    bufPtr = buf.data();
+  }
+
   ULONG transferred = 0;
   return WinUsb_ControlTransfer(
-             hWinUsb, pkt,
-             const_cast<UCHAR*>(static_cast<const UCHAR*>(data)),
+             hWinUsb, pkt, bufPtr,
              length, &transferred, nullptr) == TRUE;
 }
 
@@ -394,7 +404,7 @@ bool UsbAoaTransport::StartHandshake(const std::wstring& targetDevicePath) {
     // Step 6 - SEND_STRING (indices 0-5)
     for (uint16_t idx = 0; idx < 6; ++idx) {
       const char* str = kAoaStrings[idx];
-      uint16_t len = static_cast<uint16_t>(std::strlen(str)); // exclude NUL
+      uint16_t len = static_cast<uint16_t>(std::strlen(str) + 1); // include NUL per AOA spec
       if (!SendAoaControlTransfer(hWinUsbTemp, AOA_SEND_STRING,
                                   idx, str, len)) {
         DWORD err = ::GetLastError();
