@@ -36,13 +36,13 @@ pwsh .\scripts\build.ps1 -Config Release
 
 ## 注册 DirectShow 虚拟摄像头
 
-驱动 DLL 导出了 `DllRegisterServer` / `DllUnregisterServer`，可以直接用 `regsvr32`：
+驱动 DLL 导出了 `DllRegisterServer` / `DllUnregisterServer`，可直接用 `regsvr32`：
 
 ```powershell
 regsvr32 /s .\build\windows\virtualcam-driver\Release\acb-virtualcam.dll
 ```
 
-卸载：
+反注册：
 
 ```powershell
 regsvr32 /u /s .\build\windows\virtualcam-driver\Release\acb-virtualcam.dll
@@ -56,11 +56,22 @@ regsvr32 /u /s .\build\windows\virtualcam-driver\Release\acb-virtualcam.dll
 pwsh .\scripts\start-virtualcam.ps1 -Receiver "127.0.0.1:39393" -Fps 30
 ```
 
-该脚本会：
+当前脚本行为：
 
-1. 检查并构建 `acb-virtualcam-bridge`
-2. 启动桥接进程
-3. 启动 Python consumer（保留兼容路径）
+1. 若缺少 `acb-virtualcam-bridge.exe`，先尝试构建该目标
+2. 启动或复用现有 `acb-virtualcam-bridge`
+3. 通过命名管道下发：
+   - `SET_RECEIVER <host:port>`
+   - `SET_INTERVAL <ms>`
+   - `START`
+4. 启动 `scripts/virtualcam_consumer.py`
+5. 将 consumer 输出写入 `dist/logs/virtualcam-consumer.out.log` 和 `.err.log`
+
+如需前台运行 consumer：
+
+```powershell
+pwsh .\scripts\start-virtualcam.ps1 -Receiver "127.0.0.1:39393" -Fps 30 -Foreground
+```
 
 停止桥接：
 
@@ -68,11 +79,14 @@ pwsh .\scripts\start-virtualcam.ps1 -Receiver "127.0.0.1:39393" -Fps 30
 pwsh .\scripts\stop-virtualcam.ps1
 ```
 
-手动发送控制命令：
+注意：`stop-virtualcam.ps1` 当前只会向 bridge 发送 `STOP`，如果 Python consumer 仍在运行，需要按日志或进程名自行结束。
+
+## 手动发送控制命令
 
 ```powershell
 pwsh .\scripts\send-vcam-command.ps1 -Command "STATUS"
 pwsh .\scripts\send-vcam-command.ps1 -Command "SET_RECEIVER 127.0.0.1:39393"
+pwsh .\scripts\send-vcam-command.ps1 -Command "SET_INTERVAL 20"
 pwsh .\scripts\send-vcam-command.ps1 -Command "START"
 ```
 
@@ -93,12 +107,12 @@ pwsh .\scripts\send-vcam-command.ps1 -Command "START"
 \\.\pipe\acb-virtualcam-control
 ```
 
-## 当前推荐用法
+## 推荐用法
 
-推荐把它理解为“两段式”方案：
+推荐理解为两段式：
 
-1. Receiver 负责采集/解码
-2. Bridge 负责本地共享内存发布
+1. Receiver 负责采集、接收、解码
+2. Bridge 负责共享内存发布
 3. DirectShow 虚拟摄像头负责系统摄像头暴露
 
-仓库里保留的 `scripts/virtualcam_consumer.py` 仍然可用于 `pyvirtualcam` / UnityCapture 兼容测试，但不再是唯一方案。
+仓库中保留的 `scripts/virtualcam_consumer.py` 仍然用于 `pyvirtualcam` / UnityCapture 兼容测试，但当前 Windows 侧主路径已经是 DirectShow 驱动 + bridge。

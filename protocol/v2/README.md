@@ -1,25 +1,40 @@
 # ACB Protocol v2
 
-This version extends v1 without removing any v1 endpoint.
+当前仓库中的 v2 已经是主要数据面。它扩展了 v1，但没有移除旧的 v1 兼容接口。
 
-## Control Plane
+## Control plane
 
+- `POST /api/v2/adb/setup`
 - `POST /api/v2/session/start`
 - `POST /api/v2/session/stop`
 - `GET /api/v2/session/{sessionId}/stats`
-- `POST /api/v2/adb/setup`
 
-### session/start request example
+### `session/start` request example
+
 ```json
 {
   "transport": "usb-adb",
-  "mode": "obs_direct",
-  "video": {"codec": "h264", "width": 1280, "height": 720, "fps": 30, "bitrate": 4000000, "keyint": 60},
-  "audio": {"codec": "aac", "sampleRate": 48000, "channels": 1, "bitrate": 96000, "enabled": true}
+  "mode": "receiver_gui",
+  "video": {
+    "codec": "h264",
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "bitrate": 4000000,
+    "keyint": 60
+  },
+  "audio": {
+    "codec": "aac",
+    "sampleRate": 48000,
+    "channels": 1,
+    "bitrate": 96000,
+    "enabled": true
+  }
 }
 ```
 
-### session/start response example
+### `session/start` response example
+
 ```json
 {
   "sessionId": "sess_v2_...",
@@ -29,21 +44,63 @@ This version extends v1 without removing any v1 endpoint.
 }
 ```
 
-## Media Plane
+当 `transport` 为 `usb-native` 或 `usb-aoa` 时，响应里还会附带对应的链路状态字段。
 
-Media transport target is `WebSocket /ws/v2/media` with binary frames.
+## Media plane
 
-Current repository state:
-- v2 control plane is implemented.
-- v2 media WebSocket endpoint accepts binary frames and updates v2 media stats.
-- Receiver decodes v2 H.264 and exposes decoded frames via `GET /api/v2/frame.bgra`.
-- OBS plugin prefers `/api/v2/frame.bgra`; when unavailable it falls back to v1 JPEG endpoint.
-- v1 JPEG endpoints remain active as compatibility fallback.
+### `usb-adb` / `lan`
 
-## Receiver Decoded Frame Endpoint
+媒体走：
+
+- `WebSocket /ws/v2/media`
+
+发送二进制 packet，格式见 [`media_frame.md`](media_frame.md)。
+
+### `usb-native`
+
+媒体通过：
+
+- `POST /api/v2/usb-native/handshake`
+- `POST /api/v2/usb-native/packet`
+
+其中 `/packet` 请求体中的 `payload` 是 Base64 编码后的完整 v2 packet。
+
+### `usb-aoa`
+
+媒体通过 Android Open Accessory bulk 发送。链路前置控制接口为：
+
+- `POST /api/v2/usb-aoa/connect`
+- `POST /api/v2/usb-aoa/disconnect`
+- `GET /api/v2/usb-aoa/status`
+
+AOA bulk 内部会先包一层 ACB framing header，再承载完整 v2 packet，详见 [`media_frame.md`](media_frame.md)。
+
+## Receiver decoded frame endpoint
 
 - `GET /api/v2/frame.bgra`
-  - Binary response layout:
-    - bytes `[0..3]`: little-endian `width`
-    - bytes `[4..7]`: little-endian `height`
-    - bytes `[8..]`: BGRA bytes (`width * height * 4`)
+
+二进制响应布局：
+
+- bytes `[0..3]`：little-endian `width`
+- bytes `[4..7]`：little-endian `height`
+- bytes `[8..]`：BGRA bytes，长度为 `width * height * 4`
+
+常见返回：
+
+- `404 {"error":"no_frame"}`
+- `404 {"error":"stale_frame"}`
+
+这个接口被以下组件消费：
+
+- `acb-virtualcam-bridge`
+- OBS 插件的 BGRA 拉帧路径
+
+## Session stats
+
+`GET /api/v2/session/{sessionId}/stats` 当前会返回：
+
+- 通用会话字段：`sessionId`、`transport`
+- v1/v2 兼容统计：`frameCount`、`audioBytes`、`audioPackets`
+- v2 视频统计：`v2VideoBytes`、`v2VideoFrames`、`v2Keyframes`、`v2DecodedFrames`
+- v2 音频统计：`v2AudioBytes`、`v2AudioFrames`
+- USB 附加状态：`usbNativeConnected`、`usbLinkActive`、`usbLinkRxPackets`、`usbLinkRxBytes` 等
