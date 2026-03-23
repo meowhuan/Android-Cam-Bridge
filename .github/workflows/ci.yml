@@ -105,32 +105,38 @@ jobs:
             return
           }
 
-          $pfxPath = Join-Path $env:RUNNER_TEMP "acb-aoa-test.pfx"
-          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:AOA_TEST_CERT_PFX_BASE64))
+          try {
+            $pfxPath = Join-Path $env:RUNNER_TEMP "acb-aoa-test.pfx"
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:AOA_TEST_CERT_PFX_BASE64))
 
-          $cerArg = @()
-          if (-not [string]::IsNullOrWhiteSpace($env:AOA_TEST_CERT_CER_BASE64)) {
-            $cerPath = Join-Path $env:RUNNER_TEMP "acb-aoa-test.cer"
-            [IO.File]::WriteAllBytes($cerPath, [Convert]::FromBase64String($env:AOA_TEST_CERT_CER_BASE64))
-            $cerArg = @("-ExistingCerPath", $cerPath)
+            $cerArg = @()
+            if (-not [string]::IsNullOrWhiteSpace($env:AOA_TEST_CERT_CER_BASE64)) {
+              $cerPath = Join-Path $env:RUNNER_TEMP "acb-aoa-test.cer"
+              [IO.File]::WriteAllBytes($cerPath, [Convert]::FromBase64String($env:AOA_TEST_CERT_CER_BASE64))
+              $cerArg = @("-ExistingCerPath", $cerPath)
+            }
+
+            $signArgs = @(
+              "-NoProfile",
+              "-ExecutionPolicy", "Bypass",
+              "-File", ".\scripts\sign-aoa-driver.ps1",
+              "-ExistingPfxPath", $pfxPath,
+              "-PfxPassword", $env:AOA_TEST_CERT_PASSWORD,
+              "-InstallCertificate:`$false",
+              "-UseMakeCatFallback"
+            ) + $cerArg
+
+            pwsh @signArgs
+            if ($LASTEXITCODE -ne 0) {
+              throw "sign-aoa-driver.ps1 exited with code $LASTEXITCODE"
+            }
+
+            "signed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          } catch {
+            Write-Host "::warning::AOA driver signing failed: $_"
+            Write-Host "Continuing build without signed driver."
+            "signed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           }
-
-          $args = @(
-            "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-File", ".\scripts\sign-aoa-driver.ps1",
-            "-ExistingPfxPath", $pfxPath,
-            "-PfxPassword", $env:AOA_TEST_CERT_PASSWORD,
-            "-InstallCertificate:`$false",
-            "-UseMakeCatFallback"
-          ) + $cerArg
-
-          pwsh @args
-          if ($LASTEXITCODE -ne 0) {
-            throw "AOA driver signing failed."
-          }
-
-          "signed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Build Android debug APK
         shell: pwsh
