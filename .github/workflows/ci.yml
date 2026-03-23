@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: ["main", "master", "develop", "feature/**"]
+    branches: ["main", "master", "develop", "dev", "dev/**", "feature/**"]
   pull_request:
   workflow_dispatch:
 
@@ -113,6 +113,10 @@ jobs:
           $required = @(
             "dist/acb-win-x64/package.json",
             "dist/acb-win-x64/receiver/acb-receiver.exe",
+            "dist/acb-win-x64/virtualcam-bridge/acb-virtualcam-bridge.exe",
+            "dist/acb-win-x64/virtualcam-driver/acb-virtualcam.dll",
+            "dist/acb-win-x64/drivers/aoa-winusb/acb-aoa.inf",
+            "dist/acb-win-x64/drivers/aoa-winusb/install-driver.ps1",
             "dist/acb-win-x64/prereqs/vc_redist.x64.exe"
           )
           foreach ($item in $required) {
@@ -137,7 +141,6 @@ jobs:
           name: acb-android-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-
 
 
 

@@ -1,183 +1,253 @@
 # Android Cam Bridge (ACB)
 
-面向 **Android 采集端 + Windows 接收端** 的摄像头桥接项目，支持：
-- Android CameraX 采集
-- Windows Receiver（HTTP 控制面 + v2 WebSocket 媒体面）
-- OBS Source 插件接入
-- WinUI GUI 控制台
-- 一键打包与安装器发布流程
+面向 `Android 采集端 + Windows 接收端` 的摄像头桥接项目。当前 `dev` 分支已经包含以下链路与集成能力：
 
-## 当前仓库包含的部件
+- Android Camera2/MediaCodec 采集、H.264/AAC 编码与推流
+- Windows Receiver（HTTP 控制面 + v2 媒体面）
+- GUI 控制台（WinUI 3）
+- OBS Source 插件
+- `usb-adb`、`usb-native`、`usb-aoa` 三种传输模式
+- VirtualCam Bridge + DirectShow 虚拟摄像头驱动
+- 统一打包、安装器与 GitHub Actions 发布流程
 
-| 部件 | 路径 | 作用 | 当前状态 |
-| --- | --- | --- | --- |
-| Android App | `android/` | CameraX 采集、H.264/AAC 编码、v1+v2 推流 | 可用 |
-| Receiver | `windows/receiver/` | 会话控制、帧接收、v2 H.264 解码、统计接口 | 可用 |
-| OBS Plugin | `windows/obs-plugin/` | 在 OBS 中提供 `android_cam_source` 源 | 可用 |
-| WinUI GUI | `windows/gui/Acb.Gui/` | Receiver 地址配置、会话管理、统计与日志 | 可用 |
-| VirtualCam Bridge | `windows/virtualcam-bridge/` | 虚拟摄像头桥接实验入口 | 实验 |
-| Protocol Docs | `protocol/` | 信令、v2 媒体帧格式说明 | 可用 |
-| Installer | `installer/` + `scripts/` | Payload 打包、Inno Setup 安装器 | 可用 |
-| CI/Release | `.github/workflows/` | CI 构建 + Tag 发布资产 | 可用 |
+## 本次 PR 合并后的重点能力
+
+- `usb-aoa`：Windows 端通过 WinUSB + Android Open Accessory 发起原生 USB bulk 传输，不依赖 ADB reverse。
+- `usb-native`：保留无 ADB 的 USB 网络链路，适合手机可通过 USB 网络访问 Receiver 的场景。
+- `acb-virtualcam-bridge`：持续从 Receiver 拉取 `GET /api/v2/frame.bgra`，写入共享内存。
+- `acb-virtualcam.dll`：DirectShow 虚拟摄像头驱动，可直接把共享内存中的 BGRA 帧暴露为系统摄像头。
+- `drivers/aoa-winusb/`：随仓库提供 AOA WinUSB INF 与安装脚本，方便本地调试和打包发布。
+
+## 组件总览
+
+| 组件 | 路径 | 作用 |
+| --- | --- | --- |
+| Android App | `android/` | 采集、编码、会话控制、USB accessory 接入 |
+| Receiver | `windows/receiver/` | HTTP API、v2 媒体处理、USB AOA 接收 |
+| GUI | `windows/gui/Acb.Gui/` | Receiver 管理、ADB 设置、USB 状态面板 |
+| OBS Plugin | `windows/obs-plugin/` | 在 OBS 中提供 `android_cam_source` |
+| VirtualCam Bridge | `windows/virtualcam-bridge/` | 把 Receiver 帧发布到共享内存 |
+| VirtualCam Driver | `windows/virtualcam-driver/` | DirectShow 虚拟摄像头驱动 |
+| AOA Driver Files | `drivers/aoa-winusb/` | WinUSB INF 与安装脚本 |
+| Protocol Docs | `protocol/` | 信令与 v2 媒体帧说明 |
 
 ## 架构速览
 
-1. Android 启动后请求 Receiver `POST /api/v2/session/start`
-2. Receiver 返回 `wsUrl`，Android 通过 `ws://.../ws/v2/media` 发送二进制媒体帧
-3. Receiver 解析并累计统计，视频帧可通过 `GET /api/v2/frame.bgra` 拉取
-4. OBS 插件优先拉取 `/api/v2/frame.bgra`，失败时回退 `/api/v1/frame.jpg`
-5. GUI 通过 Receiver HTTP API 做 ADB 设置、会话管理和统计查看
+### `usb-adb`
 
-## VirtualCam Bridge 虚拟摄像头实现
+1. GUI 或用户执行 `POST /api/v2/adb/setup`
+2. Android 通过 `transport=usb-adb` 发起会话
+3. 媒体走 Receiver 的 v2 WebSocket / 兼容 HTTP 路径
 
-当前实现采用“桥接进程 + 现有虚拟摄像头驱动”两段式方案：
+### `usb-native`
 
-1. `acb-virtualcam-bridge` 从 Receiver 拉取 `GET /api/v2/frame.bgra`
-2. 桥接进程将 BGRA 帧写入共享内存 `Local\acb_virtualcam_frame`
-3. 通过命名管道 `\\.\pipe\acb-virtualcam-control` 提供 `START/STOP/STATUS/SET_RECEIVER/SET_INTERVAL/EXIT` 控制
-4. 消费端（`scripts/virtualcam_consumer.py`）读取共享内存并通过 `pyvirtualcam` 推送给系统虚拟摄像头设备（如 UnityCapture）
+1. Android 通过 USB 网络访问 Receiver 地址
+2. `POST /api/v2/session/start` 使用 `transport=usb-native`
+3. Receiver 提供 `/api/v2/usb-native/*` 调试与握手接口
+4. Android 继续通过 HTTP 请求发送 packet
 
-说明：
-- Bridge 负责稳定采帧与本地 IPC，不直接注册系统摄像头驱动。
-- 系统摄像头枚举能力由虚拟摄像头驱动提供（当前默认使用 UnityCapture）。
+说明：`usb-native` 当前仍是“USB 网络上的原生模式”，不是 raw USB bulk。
 
-快速启动（Windows）：
-```powershell
-pwsh .\scripts\start-virtualcam.ps1 -Receiver "127.0.0.1:39393" -Fps 30
-```
+### `usb-aoa`
 
-## API 概览
+1. Windows 端执行 `POST /api/v2/usb-aoa/connect`
+2. Receiver 通过 WinUSB 与手机协商 AOA accessory 模式
+3. Android App 在 accessory 模式下打开 `UsbAccessory`
+4. 媒体帧通过 AOA bulk 通道直接写入 Receiver
 
-Receiver 默认地址：`http://127.0.0.1:39393`
+### 虚拟摄像头
 
-### v1（兼容路径）
-- `POST /api/v1/session/start`
-- `POST /api/v1/session/answer`
-- `POST /api/v1/session/stop`
-- `POST /api/v1/frame`
-- `POST /api/v1/audio`
-- `GET /api/v1/frame.jpg`
-- `GET /api/v1/devices`
-- `GET /api/v1/stats/{sessionId}`
-
-### v2（主链路）
-- `POST /api/v2/session/start`
-- `POST /api/v2/session/stop`
-- `POST /api/v2/adb/setup`
-- `GET /api/v2/session/{sessionId}/stats`
-- `GET /api/v2/frame.bgra`
-- `WS /ws/v2/media`
-
-详细协议见：
-- [`protocol/README.md`](protocol/README.md)
-- [`protocol/v2/README.md`](protocol/v2/README.md)
-- [`protocol/v2/media_frame.md`](protocol/v2/media_frame.md)
-
-## 开发环境要求
-
-### Windows
-- Visual Studio 2022（Desktop C++）
-- CMake 3.22+
-- PowerShell 7+
-- .NET 10 SDK（GUI）
-- Java 17 + Gradle（Android 构建）
-- Android Platform Tools（ADB）
-- OBS Studio（用于插件联调）
-
-### OBS 兼容性注意
-- 当前 CI/Release 以 **OBS 32.0.4** SDK 构建插件。
-- 建议本机 OBS 版本与插件构建使用的 libobs 小版本保持一致，避免 ABI 不匹配导致加载失败。
+1. `acb-virtualcam-bridge` 拉取 `GET /api/v2/frame.bgra`
+2. Bridge 将 BGRA 帧写入 `Local\acb_virtualcam_frame`
+3. `acb-virtualcam.dll` 从共享内存读取最新帧
+4. DirectShow 将 `Android Cam Bridge` 暴露给系统摄像头枚举
 
 ## 快速开始
 
-### 1) 构建 Windows 目标
+### 1. 构建 Windows 目标
+
 ```powershell
-pwsh ./scripts/build.ps1 -Config Release
+pwsh .\scripts\build.ps1 -Config Release
 ```
 
-若需要构建可加载的真实 OBS 插件，请提供 OBS SDK 路径：
+如需构建可加载的 OBS 插件，请额外提供 OBS SDK 路径：
+
 ```powershell
-pwsh ./scripts/build.ps1 -Config Release `
+pwsh .\scripts\build.ps1 -Config Release `
   -ObsIncludeDir "C:/path/to/obs-studio/libobs" `
   -ObsGeneratedIncludeDir "C:/path/to/obs-studio/build_x64/config" `
   -ObsLibDir "C:/path/to/obs-studio/build_x64/libobs/Release"
 ```
 
-### 2) 启动 Receiver
+### 2. 启动 Receiver
+
 ```powershell
 .\build\windows\receiver\Release\acb-receiver.exe
 ```
 
-### 3) 运行 GUI（可选）
+### 3. 运行 GUI
+
 ```powershell
-pwsh ./scripts/run-gui.ps1
+pwsh .\scripts\run-gui.ps1
 ```
 
-### 4) Android 端构建
+GUI 当前支持：
+
+- `usb-adb`、`usb-native`、`usb-aoa`、`lan`
+- `USB Native` 设备列表、状态与链路刷新
+- `USB AOA` 连接/断开与状态查看
+- 本地 Receiver 自动拉起
+
+### 4. 构建 Android App
+
 ```powershell
 cd android
 gradle :app:assembleDebug
 ```
 
-## 打包与安装
+## USB 使用说明
 
-### 生成 payload 目录
-```powershell
-pwsh ./scripts/package.ps1 -Version 0.2.4
-```
-输出：`dist/acb-win-x64`
+### `usb-adb`
 
-### 生成安装器 EXE（Inno Setup）
 ```powershell
-pwsh ./scripts/build-installer.ps1 -Version 0.2.4
+adb devices
+adb reverse tcp:39393 tcp:39393
 ```
+
+适合最稳定的开发期联调。
+
+### `usb-native`
+
+- 不依赖 ADB reverse
+- 需要手机通过 USB 网络可访问 Receiver
+- 默认仍走 Receiver 的 HTTP/v2 packet 接口
+
+详细说明见 [`docs/USB_NATIVE.md`](docs/USB_NATIVE.md)。
+
+### `usb-aoa`
+
+1. 先构建并启动 Receiver
+2. 以管理员身份安装 WinUSB 驱动：
+
+```powershell
+pwsh .\drivers\aoa-winusb\install-driver.ps1
+```
+
+3. 打开 GUI，选择 `USB (AOA Direct)`
+4. 点击 `AOA Connect`
+5. 启动 v2 会话
+
+详细说明见 [`docs/USB_NATIVE.md`](docs/USB_NATIVE.md)。
+
+## Virtual Camera
+
+构建产物：
+
+- `build/windows/virtualcam-bridge/Release/acb-virtualcam-bridge.exe`
+- `build/windows/virtualcam-driver/Release/acb-virtualcam.dll`
+
+注册虚拟摄像头驱动：
+
+```powershell
+regsvr32 /s .\build\windows\virtualcam-driver\Release\acb-virtualcam.dll
+```
+
+启动桥接进程：
+
+```powershell
+pwsh .\scripts\start-virtualcam.ps1 -Receiver "127.0.0.1:39393" -Fps 30
+```
+
+卸载驱动：
+
+```powershell
+regsvr32 /u /s .\build\windows\virtualcam-driver\Release\acb-virtualcam.dll
+```
+
+详细说明见 [`docs/VIRTUALCAM_BRIDGE.md`](docs/VIRTUALCAM_BRIDGE.md)。
+
+## Receiver API 摘要
+
+### v2 会话
+
+- `POST /api/v2/session/start`
+- `POST /api/v2/session/stop`
+- `GET /api/v2/session/{sessionId}/stats`
+- `POST /api/v2/adb/setup`
+- `GET /api/v2/frame.bgra`
+- `WS /ws/v2/media`
+
+### USB 调试接口
+
+- `GET /api/v2/usb-native/devices`
+- `GET /api/v2/usb-native/status`
+- `GET /api/v2/usb-native/link`
+- `POST /api/v2/usb-native/handshake`
+- `POST /api/v2/usb-native/packet`
+- `POST /api/v2/usb-aoa/connect`
+- `POST /api/v2/usb-aoa/disconnect`
+- `GET /api/v2/usb-aoa/status`
+
+## 打包与发布
+
+### 生成 Windows payload
+
+```powershell
+pwsh .\scripts\package.ps1 -Version 0.2.4
+```
+
+输出目录 `dist/acb-win-x64/` 当前包含：
+
+- `receiver/`
+- `gui/`
+- `obs-plugin/`（真实 OBS SDK 构建时）
+- `virtualcam-bridge/`
+- `virtualcam-driver/`
+- `drivers/aoa-winusb/`
+- `prereqs/`
+
+### 生成安装器
+
+```powershell
+pwsh .\scripts\build-installer.ps1 -Version 0.2.4
+```
+
 输出：`dist/installer/ACB-Setup-0.2.4.exe`
 
-### 本地安装 / 卸载
-```powershell
-pwsh ./dist/acb-win-x64/install-acb.ps1
-pwsh "C:\Program Files\ACB\uninstall-acb.ps1"
-```
+安装器当前支持的组件：
 
-安装器细节见 [`docs/INSTALLER.md`](docs/INSTALLER.md)。
+- `Receiver`
+- `GUI`
+- `OBS Plugin`
+- `DirectShow Virtual Camera`
+- `AOA WinUSB Driver Files`
 
-## 自动化发布
+其中：
+
+- 选择虚拟摄像头组件时，安装器会自动注册 `acb-virtualcam.dll`
+- 选择 AOA 驱动组件后，可在安装向导里勾选“立即安装 AOA WinUSB 驱动”
+- 如需手动处理，仍可按文档执行 `regsvr32` 与 `pnputil/install-driver.ps1`
+
+### GitHub Actions
 
 - CI：`.github/workflows/ci.yml`
 - Release：`.github/workflows/release.yml`
 
-Tag 发布示例：
-```powershell
-git tag v0.2.4
-git push origin v0.2.4
-```
+CI/Release 现在会校验这些新增产物是否进入 payload：
 
-发布文档：
-- [`docs/RELEASE.md`](docs/RELEASE.md)
-- [`docs/RELEASE_NOTES.md`](docs/RELEASE_NOTES.md)
+- `virtualcam-bridge/acb-virtualcam-bridge.exe`
+- `virtualcam-driver/acb-virtualcam.dll`
+- `drivers/aoa-winusb/acb-aoa.inf`
+- `drivers/aoa-winusb/install-driver.ps1`
 
 ## 文档导航
 
 - GUI 使用说明：[`docs/GUI.md`](docs/GUI.md)
-- USB Native 说明：[`docs/USB_NATIVE.md`](docs/USB_NATIVE.md)
-- VirtualCam Bridge：[`docs/VIRTUALCAM_BRIDGE.md`](docs/VIRTUALCAM_BRIDGE.md)
-- 安装说明：[`docs/INSTALLER.md`](docs/INSTALLER.md)
+- USB 模式说明：[`docs/USB_NATIVE.md`](docs/USB_NATIVE.md)
+- 虚拟摄像头：[`docs/VIRTUALCAM_BRIDGE.md`](docs/VIRTUALCAM_BRIDGE.md)
+- 安装与打包：[`docs/INSTALLER.md`](docs/INSTALLER.md)
 - 环境与接入（EN）：[`docs/SETUP.md`](docs/SETUP.md)
 - 环境与接入（中文）：[`docs/SETUP.zh-CN.md`](docs/SETUP.zh-CN.md)
-- 故障排查（EN）：[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
-- 故障排查（中文）：[`docs/TROUBLESHOOTING.zh-CN.md`](docs/TROUBLESHOOTING.zh-CN.md)
-
-## 目录结构
-
-```text
-android/                    Android 采集端
-windows/receiver/           Windows 接收端
-windows/obs-plugin/         OBS 插件
-windows/gui/Acb.Gui/        WinUI GUI
-windows/virtualcam-bridge/  虚拟摄像头桥接（实验）
-protocol/                   协议定义与文档
-installer/                  安装器模板（Inno/WiX）
-scripts/                    构建/打包/安装脚本
-docs/                       使用、发布、排障文档
-.github/workflows/          CI 与发布流水线
-```
+- 发布流程：[`docs/RELEASE.md`](docs/RELEASE.md)
+- 发布记录：[`docs/RELEASE_NOTES.md`](docs/RELEASE_NOTES.md)
+- 协议说明：[`protocol/README.md`](protocol/README.md)

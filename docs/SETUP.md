@@ -1,53 +1,118 @@
 # Setup Guide
 
 ## Components
+
 - Android app (`android/`)
-- Windows receiver (`windows/receiver`)
-- OBS plugin (`windows/obs-plugin`)
+- Windows receiver (`windows/receiver/`)
+- WinUI GUI (`windows/gui/Acb.Gui/`)
+- OBS plugin (`windows/obs-plugin/`)
+- Virtual camera bridge (`windows/virtualcam-bridge/`)
+- DirectShow virtual camera driver (`windows/virtualcam-driver/`)
+- AOA WinUSB driver files (`drivers/aoa-winusb/`)
 
 ## Windows prerequisites
-- Visual Studio 2022 (Desktop C++)
+
+- Visual Studio 2022 with Desktop C++
 - CMake 3.22+
-- OBS Studio (for plugin testing)
+- PowerShell 7+
+- .NET 10 SDK
+- Java 17
 - Android Platform Tools (ADB)
+- OBS Studio and OBS SDK sources when building the real OBS plugin
+- Administrator privileges for WinUSB driver install and `regsvr32`
 
-## Quick start
-1. Build Windows targets:
-   ```powershell
-   cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-   cmake --build build --config Release
-   ```
-2. Start receiver:
-   ```powershell
-   .\build\windows\receiver\Release\acb-receiver.exe
-   ```
-3. Verify API:
-   ```powershell
-   curl http://127.0.0.1:39393/api/v1/devices
-   ```
-4. Build/install Android app from Android Studio.
+## Build native targets
 
-## USB ADB mode (v0.1)
+```powershell
+pwsh .\scripts\build.ps1 -Config Release
+```
+
+This builds:
+
+- `acb-receiver`
+- `acb-virtualcam-bridge`
+- `acb-virtualcam`
+- `acb-obs-plugin` (real or stub, depending on OBS SDK inputs)
+
+## Start receiver
+
+```powershell
+.\build\windows\receiver\Release\acb-receiver.exe
+```
+
+## Run GUI
+
+```powershell
+pwsh .\scripts\run-gui.ps1
+```
+
+## Build Android app
+
+```powershell
+cd android
+gradle :app:assembleDebug
+```
+
+## Transport modes
+
+### `usb-adb`
+
 ```powershell
 adb devices
 adb reverse tcp:39393 tcp:39393
 ```
 
-## OBS plugin integration
-- Build with OBS SDK paths so module exports are present:
-  ```powershell
-  cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
-    -DOBS_INCLUDE_DIR="C:/path/to/obs-studio/libobs" `
-    -DOBS_GENERATED_INCLUDE_DIR="C:/path/to/obs-studio/build_x64/config" `
-    -DOBS_LIB_DIR="C:/path/to/obs-studio/build/libobs/Release"
-  cmake --build build --config Release --target acb-obs-plugin
-  ```
-- Install plugin files (DLL + locale):
-  ```powershell
-  .\scripts\install-obs-plugin.ps1
-  ```
-- Result layout:
-  - `C:\ProgramData\obs-studio\plugins\acb-obs-plugin\bin\64bit\acb-obs-plugin.dll`
-  - `C:\ProgramData\obs-studio\plugins\acb-obs-plugin\data\locale\en-US.ini`
-- Add source `android_cam_source` in OBS.
-- Use OBS Virtual Camera when needed by external apps.
+### `usb-native`
+
+Use this when the phone can reach Receiver over USB networking. No `adb reverse` is required.
+
+### `usb-aoa`
+
+Install the bundled WinUSB driver first:
+
+```powershell
+pwsh .\drivers\aoa-winusb\install-driver.ps1
+```
+
+Then in GUI:
+
+1. Select `USB (AOA Direct)`
+2. Click `AOA Connect`
+3. Start the v2 session
+
+## OBS plugin
+
+Build with OBS SDK paths:
+
+```powershell
+pwsh .\scripts\build.ps1 -Config Release `
+  -ObsIncludeDir "C:/path/to/obs-studio/libobs" `
+  -ObsGeneratedIncludeDir "C:/path/to/obs-studio/build_x64/config" `
+  -ObsLibDir "C:/path/to/obs-studio/build_x64/libobs/Release"
+```
+
+Install plugin files:
+
+```powershell
+pwsh .\scripts\install-obs-plugin.ps1
+```
+
+## DirectShow virtual camera
+
+Register:
+
+```powershell
+regsvr32 /s .\build\windows\virtualcam-driver\Release\acb-virtualcam.dll
+```
+
+Run bridge:
+
+```powershell
+pwsh .\scripts\start-virtualcam.ps1 -Receiver "127.0.0.1:39393" -Fps 30
+```
+
+Unregister:
+
+```powershell
+regsvr32 /u /s .\build\windows\virtualcam-driver\Release\acb-virtualcam.dll
+```

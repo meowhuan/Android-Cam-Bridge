@@ -51,6 +51,10 @@ if ($LASTEXITCODE -ne 0) {
 $required = @(
   (Join-Path $payloadOut "receiver\acb-receiver.exe"),
   (Join-Path $payloadOut "gui"),
+  (Join-Path $payloadOut "virtualcam-bridge\acb-virtualcam-bridge.exe"),
+  (Join-Path $payloadOut "virtualcam-driver\acb-virtualcam.dll"),
+  (Join-Path $payloadOut "drivers\aoa-winusb\acb-aoa.inf"),
+  (Join-Path $payloadOut "drivers\aoa-winusb\install-driver.ps1"),
   (Join-Path $payloadOut "prereqs\vc_redist.x64.exe")
 )
 foreach ($item in $required) {

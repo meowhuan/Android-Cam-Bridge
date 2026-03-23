@@ -5,6 +5,11 @@ param(
   [switch]$InstallReceiver = $true,
   [switch]$InstallGui = $true,
   [switch]$InstallObsPlugin = $true,
+  [switch]$InstallVirtualCamBridge = $true,
+  [switch]$InstallVirtualCam = $true,
+  [switch]$RegisterVirtualCam = $true,
+  [switch]$InstallAoaDriverFiles = $true,
+  [switch]$InstallAoaDriver = $true,
   [string]$ObsPath = ""
 )
 
@@ -21,9 +26,14 @@ function Copy-WithManifest {
     [string]$To,
     [System.Collections.Generic.List[string]]$Manifest
   )
+  if (-not (Test-Path $From)) {
+    Write-Warning "Source file not found, skipping: $From"
+    return $false
+  }
   New-Item -ItemType Directory -Path (Split-Path -Parent $To) -Force | Out-Null
   Copy-Item -Path $From -Destination $To -Force
   $Manifest.Add($To)
+  return $true
 }
 
 function Copy-DirWithManifest {
@@ -32,10 +42,15 @@ function Copy-DirWithManifest {
     [string]$ToDir,
     [System.Collections.Generic.List[string]]$Manifest
   )
+  if (-not (Test-Path $FromDir)) {
+    Write-Warning "Source directory not found, skipping: $FromDir"
+    return $false
+  }
   New-Item -ItemType Directory -Path $ToDir -Force | Out-Null
   Copy-Item -Path (Join-Path $FromDir "*") -Destination $ToDir -Recurse -Force
   $files = Get-ChildItem -Path $ToDir -Recurse -File | Select-Object -ExpandProperty FullName
   foreach ($f in $files) { $Manifest.Add($f) }
+  return $true
 }
 
 function Resolve-ObsRoots {
@@ -55,6 +70,18 @@ function Resolve-ObsRoots {
   $roots | Select-Object -Unique
 }
 
+function Invoke-CheckedProcess {
+  param(
+    [string]$FilePath,
+    [string[]]$ArgumentList,
+    [string]$ErrorMessage
+  )
+  $proc = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -Wait -PassThru -NoNewWindow
+  if ($proc.ExitCode -ne 0) {
+    throw "$ErrorMessage (exit code $($proc.ExitCode))"
+  }
+}
+
 $manifest = [System.Collections.Generic.List[string]]::new()
 New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
 
@@ -67,13 +94,13 @@ if (Test-Path $selfUninstallSrc) {
 if ($InstallReceiver) {
   $src = Join-Path $SourceRoot "receiver\acb-receiver.exe"
   $dst = Join-Path $InstallRoot "receiver\acb-receiver.exe"
-  Copy-WithManifest -From $src -To $dst -Manifest $manifest
+  [void](Copy-WithManifest -From $src -To $dst -Manifest $manifest)
 }
 
 if ($InstallGui) {
   $srcDir = Join-Path $SourceRoot "gui"
   $dstDir = Join-Path $InstallRoot "gui"
-  Copy-DirWithManifest -FromDir $srcDir -ToDir $dstDir -Manifest $manifest
+  [void](Copy-DirWithManifest -FromDir $srcDir -ToDir $dstDir -Manifest $manifest)
 }
 
 if ($InstallObsPlugin) {
@@ -81,13 +108,51 @@ if ($InstallObsPlugin) {
   $en = Join-Path $SourceRoot "obs-plugin\locale\en-US.ini"
   $zh = Join-Path $SourceRoot "obs-plugin\locale\zh-CN.ini"
   $obsRoots = Resolve-ObsRoots -UserPath $ObsPath
+  if (-not (Test-Path $pluginDll)) {
+    Write-Warning "OBS plugin payload not found, skipping OBS plugin install."
+  }
   foreach ($root in $obsRoots) {
+    if (-not (Test-Path $pluginDll)) { break }
     $bin = Join-Path $root "obs-plugins\64bit\acb-obs-plugin.dll"
     $enDst = Join-Path $root "data\obs-plugins\acb-obs-plugin\locale\en-US.ini"
     $zhDst = Join-Path $root "data\obs-plugins\acb-obs-plugin\locale\zh-CN.ini"
-    Copy-WithManifest -From $pluginDll -To $bin -Manifest $manifest
-    Copy-WithManifest -From $en -To $enDst -Manifest $manifest
-    Copy-WithManifest -From $zh -To $zhDst -Manifest $manifest
+    [void](Copy-WithManifest -From $pluginDll -To $bin -Manifest $manifest)
+    [void](Copy-WithManifest -From $en -To $enDst -Manifest $manifest)
+    [void](Copy-WithManifest -From $zh -To $zhDst -Manifest $manifest)
+  }
+}
+
+$virtualCamDllDst = $null
+if ($InstallVirtualCamBridge) {
+  $src = Join-Path $SourceRoot "virtualcam-bridge\acb-virtualcam-bridge.exe"
+  $dst = Join-Path $InstallRoot "virtualcam-bridge\acb-virtualcam-bridge.exe"
+  [void](Copy-WithManifest -From $src -To $dst -Manifest $manifest)
+}
+
+if ($InstallVirtualCam) {
+  $src = Join-Path $SourceRoot "virtualcam-driver\acb-virtualcam.dll"
+  $dst = Join-Path $InstallRoot "virtualcam-driver\acb-virtualcam.dll"
+  if (Copy-WithManifest -From $src -To $dst -Manifest $manifest) {
+    $virtualCamDllDst = $dst
+  }
+}
+
+if ($InstallAoaDriverFiles) {
+  $srcDir = Join-Path $SourceRoot "drivers\aoa-winusb"
+  $dstDir = Join-Path $InstallRoot "drivers\aoa-winusb"
+  [void](Copy-DirWithManifest -FromDir $srcDir -ToDir $dstDir -Manifest $manifest)
+}
+
+if ($RegisterVirtualCam -and $virtualCamDllDst -and (Test-Path $virtualCamDllDst)) {
+  Invoke-CheckedProcess -FilePath "regsvr32.exe" -ArgumentList @("/s", $virtualCamDllDst) -ErrorMessage "Virtual camera registration failed"
+}
+
+if ($InstallAoaDriver) {
+  $driverScript = Join-Path $InstallRoot "drivers\aoa-winusb\install-driver.ps1"
+  if (Test-Path $driverScript) {
+    Invoke-CheckedProcess -FilePath "pwsh.exe" -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $driverScript) -ErrorMessage "AOA WinUSB driver installation failed"
+  } else {
+    Write-Warning "AOA driver install script not found, skipping driver installation."
   }
 }
 

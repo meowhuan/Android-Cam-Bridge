@@ -162,6 +162,10 @@ jobs:
           $required = @(
             "dist/acb-win-x64/package.json",
             "dist/acb-win-x64/receiver/acb-receiver.exe",
+            "dist/acb-win-x64/virtualcam-bridge/acb-virtualcam-bridge.exe",
+            "dist/acb-win-x64/virtualcam-driver/acb-virtualcam.dll",
+            "dist/acb-win-x64/drivers/aoa-winusb/acb-aoa.inf",
+            "dist/acb-win-x64/drivers/aoa-winusb/install-driver.ps1",
             "dist/acb-win-x64/prereqs/vc_redist.x64.exe",
             "dist/installer/ACB-Setup-$version.exe"
           )
@@ -281,7 +285,6 @@ jobs:
             dist/release-assets/ACB-Android-${{ steps.version.outputs.value }}.apk
             dist/release-assets/SHA256SUMS.txt
             dist/release-assets/*.asc
-
 
 
 

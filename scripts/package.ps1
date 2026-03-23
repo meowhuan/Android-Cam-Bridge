@@ -83,6 +83,18 @@ function Find-BuildPluginDll {
   return $fuzzy
 }
 
+function Require-BuildFile {
+  param(
+    [string]$Root,
+    [string]$Name
+  )
+  $file = Find-BuildFile -Root $Root -Name $Name
+  if (-not $file) {
+    throw "$Name not found under build directory: $Root"
+  }
+  return $file.FullName
+}
+
 Write-Host "Packaging ACB version $Version"
 
 Reset-BuildDirIfSourceChanged -Dir $buildDir -ExpectedSource $repoRoot
@@ -100,6 +112,8 @@ if ($ObsLibDir) {
 cmake @cmakeArgs
 cmake --build $buildDir --config Release --target acb-receiver
 cmake --build $buildDir --config Release --target acb-obs-plugin
+cmake --build $buildDir --config Release --target acb-virtualcam-bridge
+cmake --build $buildDir --config Release --target acb-virtualcam
 
 $obsBuildModeFile = Join-Path $repoRoot "build\windows\obs-plugin\acb_obs_build_mode.txt"
 $obsBuildMode = ""
@@ -131,9 +145,13 @@ if (-not $receiverFile) {
   throw "acb-receiver.exe not found under build directory: $buildDir"
 }
 $receiverSrc = $receiverFile.FullName
+$virtualcamBridgeSrc = Require-BuildFile -Root $buildDir -Name "acb-virtualcam-bridge.exe"
+$virtualcamDriverSrc = Require-BuildFile -Root $buildDir -Name "acb-virtualcam.dll"
 
 $obsEnSrc = Join-Path $repoRoot "windows\obs-plugin\data\locale\en-US.ini"
 $obsZhSrc = Join-Path $repoRoot "windows\obs-plugin\data\locale\zh-CN.ini"
+$aoaDriverInfSrc = Join-Path $repoRoot "drivers\aoa-winusb\acb-aoa.inf"
+$aoaDriverInstallSrc = Join-Path $repoRoot "drivers\aoa-winusb\install-driver.ps1"
 $guiPublishDir = Join-Path $repoRoot "windows\gui\Acb.Gui\bin\Release\net10.0-windows10.0.19041.0\win-x64\publish"
 
 if (-not (Test-Path $guiPublishDir)) {
@@ -150,10 +168,17 @@ if (-not $hasRealObsPlugin) {
 $receiverOut = Join-Path $outRoot "receiver"
 $guiOut = Join-Path $outRoot "gui"
 $prereqOut = Join-Path $outRoot "prereqs"
+$virtualcamBridgeOut = Join-Path $outRoot "virtualcam-bridge"
+$virtualcamDriverOut = Join-Path $outRoot "virtualcam-driver"
+$aoaDriverOut = Join-Path $outRoot "drivers\aoa-winusb"
 
-New-Item -ItemType Directory -Path $receiverOut,$guiOut,$prereqOut -Force | Out-Null
+New-Item -ItemType Directory -Path $receiverOut,$guiOut,$prereqOut,$virtualcamBridgeOut,$virtualcamDriverOut,$aoaDriverOut -Force | Out-Null
 Copy-Item $receiverSrc (Join-Path $receiverOut "acb-receiver.exe") -Force
 Copy-Item (Join-Path $guiPublishDir "*") $guiOut -Recurse -Force
+Copy-Item $virtualcamBridgeSrc (Join-Path $virtualcamBridgeOut "acb-virtualcam-bridge.exe") -Force
+Copy-Item $virtualcamDriverSrc (Join-Path $virtualcamDriverOut "acb-virtualcam.dll") -Force
+Copy-Item $aoaDriverInfSrc (Join-Path $aoaDriverOut "acb-aoa.inf") -Force
+Copy-Item $aoaDriverInstallSrc (Join-Path $aoaDriverOut "install-driver.ps1") -Force
 
 if ($hasRealObsPlugin) {
   if (-not (Test-Path $stagedObsDll)) {
@@ -176,6 +201,10 @@ Copy-Item (Join-Path $PSScriptRoot "uninstall-acb.ps1") (Join-Path $outRoot "uni
 $files = @(
   "receiver\acb-receiver.exe",
   "gui\*",
+  "virtualcam-bridge\acb-virtualcam-bridge.exe",
+  "virtualcam-driver\acb-virtualcam.dll",
+  "drivers\aoa-winusb\acb-aoa.inf",
+  "drivers\aoa-winusb\install-driver.ps1",
   "prereqs\vc_redist.x64.exe",
   "install-acb.ps1",
   "uninstall-acb.ps1"

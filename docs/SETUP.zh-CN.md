@@ -1,81 +1,118 @@
-# 安装说明
+# 环境与接入说明
 
 ## 组件
-- Android 端应用（`android/`）
-- Windows Receiver（`windows/receiver`）
-- OBS 插件（`windows/obs-plugin`）
 
-## Windows 依赖
+- Android 应用（`android/`）
+- Windows Receiver（`windows/receiver/`）
+- WinUI GUI（`windows/gui/Acb.Gui/`）
+- OBS 插件（`windows/obs-plugin/`）
+- VirtualCam Bridge（`windows/virtualcam-bridge/`）
+- DirectShow 虚拟摄像头驱动（`windows/virtualcam-driver/`）
+- AOA WinUSB 驱动文件（`drivers/aoa-winusb/`）
+
+## Windows 环境要求
+
 - Visual Studio 2022（Desktop C++）
 - CMake 3.22+
-- OBS Studio（用于插件测试）
+- PowerShell 7+
+- .NET 10 SDK
+- Java 17
 - Android Platform Tools（ADB）
+- 构建真实 OBS 插件时需要 OBS Studio SDK 源码
+- 安装 WinUSB 驱动与注册虚拟摄像头时需要管理员权限
 
-## 快速开始
-1. 构建 Windows 组件：
-   ```powershell
-   cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-   cmake --build build --config Release
-   ```
-2. 启动 Receiver：
-   ```powershell
-   .\build\windows\receiver\Release\acb-receiver.exe
-   ```
-3. 校验 API：
-   ```powershell
-   curl http://127.0.0.1:39393/api/v1/devices
-   ```
-4. 用 Android Studio 构建并安装 Android App。
+## 构建 Windows 目标
 
-## v0.1 端到端（当前实现）
-1. 启动 Receiver：
-   ```powershell
-   .\build\windows\receiver\Release\acb-receiver.exe
-   ```
-2. OBS 中添加 `android_cam_source`：
-   - USB：`Transport=USB`，`Receiver IP:Port=127.0.0.1:39393`
-   - Wi-Fi：`Transport=Wi-Fi (IP)`，填运行 Receiver 的电脑 `IP:39393`
-   - 连接模式：`托管直连`（默认）或 `附加到 Receiver`
-   - 适配模式：`黑边保比例`（默认）/`裁切填满`/`强制拉伸`
-   - 画质预设：`平衡`/`高质量`/`超高质量`
-3. Android App：
-   - USB 模式填 `127.0.0.1:39393`
-   - Wi-Fi 模式填电脑局域网 `IP:39393`
-   - 可在 App 内直接预览画面，支持横竖屏。
-   - 可选择分辨率（640x480 / 1280x720 / 1920x1080）。
-   - 可勾选麦克风推流（推送到 Receiver 的 `/api/v1/audio`）。
-4. 如 USB 首次不通，手动执行：
-   ```powershell
-   adb reverse tcp:39393 tcp:39393
-   ```
+```powershell
+pwsh .\scripts\build.ps1 -Config Release
+```
 
-## v2 控制面接口（新增）
-- `POST /api/v2/session/start`
-- `POST /api/v2/session/stop`
-- `GET /api/v2/session/{sessionId}/stats`
-- `POST /api/v2/adb/setup`
+会构建：
 
-## USB ADB 模式（v0.1）
+- `acb-receiver`
+- `acb-virtualcam-bridge`
+- `acb-virtualcam`
+- `acb-obs-plugin`（是否为真实插件取决于是否提供 OBS SDK）
+
+## 启动 Receiver
+
+```powershell
+.\build\windows\receiver\Release\acb-receiver.exe
+```
+
+## 运行 GUI
+
+```powershell
+pwsh .\scripts\run-gui.ps1
+```
+
+## 构建 Android App
+
+```powershell
+cd android
+gradle :app:assembleDebug
+```
+
+## 三种 USB 模式
+
+### `usb-adb`
+
 ```powershell
 adb devices
 adb reverse tcp:39393 tcp:39393
 ```
 
-## OBS 接入
-- 使用 OBS SDK 路径构建，确保模块导出完整：
-  ```powershell
-  cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
-    -DOBS_INCLUDE_DIR="C:/path/to/obs-studio/libobs" `
-    -DOBS_GENERATED_INCLUDE_DIR="C:/path/to/obs-studio/build_x64/config" `
-    -DOBS_LIB_DIR="C:/path/to/obs-studio/build/libobs/Release"
-  cmake --build build --config Release --target acb-obs-plugin
-  ```
-- 安装插件文件（DLL + locale）：
-  ```powershell
-  .\scripts\install-obs-plugin.ps1
-  ```
-- 目标目录结构：
-  - `C:\ProgramData\obs-studio\plugins\acb-obs-plugin\bin\64bit\acb-obs-plugin.dll`
-  - `C:\ProgramData\obs-studio\plugins\acb-obs-plugin\data\locale\en-US.ini`
-- 在 OBS 添加 `android_cam_source`。
-- 对外输出时可直接开启 OBS 虚拟摄像头。
+### `usb-native`
+
+适用于手机已能通过 USB 网络访问 Receiver 的场景，不需要 `adb reverse`。
+
+### `usb-aoa`
+
+先安装仓库自带 WinUSB 驱动：
+
+```powershell
+pwsh .\drivers\aoa-winusb\install-driver.ps1
+```
+
+然后在 GUI 中：
+
+1. 选择 `USB（AOA 直连）`
+2. 点击 `AOA Connect`
+3. 启动 v2 会话
+
+## OBS 插件
+
+带 OBS SDK 路径构建：
+
+```powershell
+pwsh .\scripts\build.ps1 -Config Release `
+  -ObsIncludeDir "C:/path/to/obs-studio/libobs" `
+  -ObsGeneratedIncludeDir "C:/path/to/obs-studio/build_x64/config" `
+  -ObsLibDir "C:/path/to/obs-studio/build_x64/libobs/Release"
+```
+
+安装插件：
+
+```powershell
+pwsh .\scripts\install-obs-plugin.ps1
+```
+
+## DirectShow 虚拟摄像头
+
+注册：
+
+```powershell
+regsvr32 /s .\build\windows\virtualcam-driver\Release\acb-virtualcam.dll
+```
+
+启动桥接：
+
+```powershell
+pwsh .\scripts\start-virtualcam.ps1 -Receiver "127.0.0.1:39393" -Fps 30
+```
+
+卸载：
+
+```powershell
+regsvr32 /u /s .\build\windows\virtualcam-driver\Release\acb-virtualcam.dll
+```

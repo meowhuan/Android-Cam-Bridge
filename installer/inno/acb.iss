@@ -31,10 +31,14 @@ Name: "core\receiver"; Description: "Receiver"; Types: full custom; Flags: fixed
 Name: "core\gui"; Description: "GUI"; Types: full custom; Flags: fixed
 Name: "obs"; Description: "OBS Integration"; Types: full custom
 Name: "obs\plugin"; Description: "OBS Plugin"; Types: full custom
+Name: "extras"; Description: "Extra Integrations"; Types: full custom
+Name: "extras\virtualcam"; Description: "DirectShow Virtual Camera"; Types: full custom
+Name: "extras\usbdriver"; Description: "AOA WinUSB Driver Files"; Types: full custom
 
 [Tasks]
 Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "Additional icons:"; Components: core\gui
 Name: "desktopuninstall"; Description: "Create desktop uninstall shortcut"; GroupDescription: "Additional icons:"
+Name: "installaoadriver"; Description: "Install AOA WinUSB driver now"; GroupDescription: "Device setup:"; Components: extras\usbdriver
 
 [InstallDelete]
 Type: filesandordirs; Name: "{app}\gui\*"; Components: core\gui
@@ -46,6 +50,10 @@ Source: "..\..\dist\acb-win-x64\prereqs\vc_redist.x64.exe"; DestDir: "{tmp}"; Fl
 Source: "..\..\dist\acb-win-x64\obs-plugin\acb-obs-plugin.dll"; DestDir: "{code:GetObsPlugin64Dir}"; Flags: ignoreversion skipifsourcedoesntexist; Components: obs\plugin
 Source: "..\..\dist\acb-win-x64\obs-plugin\locale\en-US.ini"; DestDir: "{code:GetObsPluginLocaleDir}"; Flags: ignoreversion skipifsourcedoesntexist; Components: obs\plugin
 Source: "..\..\dist\acb-win-x64\obs-plugin\locale\zh-CN.ini"; DestDir: "{code:GetObsPluginLocaleDir}"; Flags: ignoreversion skipifsourcedoesntexist; Components: obs\plugin
+Source: "..\..\dist\acb-win-x64\virtualcam-bridge\acb-virtualcam-bridge.exe"; DestDir: "{app}\virtualcam-bridge"; Flags: ignoreversion; Components: extras\virtualcam
+Source: "..\..\dist\acb-win-x64\virtualcam-driver\acb-virtualcam.dll"; DestDir: "{app}\virtualcam-driver"; Flags: ignoreversion regserver; Components: extras\virtualcam
+Source: "..\..\dist\acb-win-x64\drivers\aoa-winusb\acb-aoa.inf"; DestDir: "{app}\drivers\aoa-winusb"; Flags: ignoreversion; Components: extras\usbdriver
+Source: "..\..\dist\acb-win-x64\drivers\aoa-winusb\install-driver.ps1"; DestDir: "{app}\drivers\aoa-winusb"; Flags: ignoreversion; Components: extras\usbdriver
 
 [Icons]
 Name: "{group}\ACB GUI"; Filename: "{app}\gui\Acb.Gui.exe"; Components: core\gui
@@ -55,6 +63,7 @@ Name: "{autodesktop}\Uninstall ACB"; Filename: "{uninstallexe}"; Tasks: desktopu
 
 [Run]
 Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; Flags: runhidden waituntilterminated; Check: NeedInstallVCRedist; Components: core\gui
+Filename: "{sys}\pnputil.exe"; Parameters: "/add-driver ""{app}\drivers\aoa-winusb\acb-aoa.inf"" /install"; StatusMsg: "Installing AOA WinUSB driver..."; Flags: runhidden waituntilterminated; Components: extras\usbdriver; Tasks: installaoadriver
 Filename: "{app}\gui\Acb.Gui.exe"; Description: "Launch ACB GUI"; Flags: nowait postinstall skipifsilent; Components: core\gui
 
 [Code]
