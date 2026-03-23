@@ -55,8 +55,8 @@ class CameraController(
     private var targetWidth = 1280
     private var targetHeight = 720
     private val v2Client = V2MediaClient { onDebugEvent?.invoke(it) }
-    private var videoEncoder: VideoAvcEncoder? = null
-    private var audioEncoder: AudioAacEncoder? = null
+    @Volatile private var videoEncoder: VideoAvcEncoder? = null
+    @Volatile private var audioEncoder: AudioAacEncoder? = null
     private var lastStartAtMs = 0L
 
     fun start(
@@ -68,8 +68,7 @@ class CameraController(
         bitrate: Int,
         pushMic: Boolean,
     ) {
-        if (running.get()) return
-        running.set(true)
+        if (!running.compareAndSet(false, true)) return
 
         currentMode = transport
         val normalizedReceiver = receiverAddress.trim()

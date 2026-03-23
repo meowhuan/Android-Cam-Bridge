@@ -41,11 +41,11 @@ class VideoAvcEncoder(
     fun encode(image: ImageProxy, onEncoded: (ByteArray, Boolean) -> Unit) {
         val input = codec.dequeueInputBuffer(0)
         if (input >= 0) {
+            val ptsUs = System.nanoTime() / 1000L
             val codecImage = try { codec.getInputImage(input) } catch (_: Throwable) { null }
             if (codecImage != null) {
                 fillCodecImage(image, codecImage)
-                val ptsUs = (++frameIndex) * 1_000_000L / fpsValue.toLong()
-                codec.queueInputBuffer(input, 0, width * height * 3 / 2, ptsUs, 0)
+                codec.queueInputBuffer(input, 0, 0, ptsUs, 0)
             } else {
                 val inBuf = codec.getInputBuffer(input)
                 if (inBuf != null) {
@@ -53,7 +53,6 @@ class VideoAvcEncoder(
                     inBuf.clear()
                     if (inBuf.capacity() >= i420.size) {
                         inBuf.put(i420)
-                        val ptsUs = (++frameIndex) * 1_000_000L / fpsValue.toLong()
                         codec.queueInputBuffer(input, 0, i420.size, ptsUs, 0)
                     } else {
                         codec.queueInputBuffer(input, 0, 0, 0, 0)

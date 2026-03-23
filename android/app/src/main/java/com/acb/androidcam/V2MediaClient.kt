@@ -48,10 +48,10 @@ class V2MediaClient(
     private val connected = AtomicBoolean(false)
     private val frameIndex = AtomicLong(0)
     private val lastConnectedAtMs = AtomicLong(0)
-    private var activeTransport = "lan"
-    private var receiverAddress = "127.0.0.1:39393"
-    private var sessionId = ""
-    private var usbNativeLinkId = ""
+    @Volatile private var activeTransport = "lan"
+    @Volatile private var receiverAddress = "127.0.0.1:39393"
+    @Volatile private var sessionId = ""
+    @Volatile private var usbNativeLinkId = ""
     private val usbSeq = AtomicLong(0)
     private val usbPacketCount = AtomicLong(0)
     @Volatile private var usbAccessoryTransport: UsbAccessoryTransport? = null

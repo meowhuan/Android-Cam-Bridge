@@ -50,6 +50,7 @@ class UsbAccessoryTransport(
      * Returns true on success, false if the accessory could not be opened.
      */
     fun open(accessory: UsbAccessory): Boolean {
+        close() // release any previous connection first
         closeOnce.set(false)
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
         val pfd: ParcelFileDescriptor? = try {
@@ -230,7 +231,8 @@ class UsbAccessoryTransport(
      */
     private fun closeResources() {
         if (!closeOnce.compareAndSet(false, true)) return
-        // Only close ParcelFileDescriptor — it owns the FD shared by both streams
+        try { outputStream?.close() } catch (_: IOException) {}
+        try { inputStream?.close() } catch (_: IOException) {}
         try { fileDescriptor?.close() } catch (_: IOException) {}
         outputStream = null
         inputStream = null

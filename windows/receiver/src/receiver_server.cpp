@@ -796,6 +796,7 @@ class H264MftDecoder {
 
     MFT_INPUT_STREAM_INFO inInfo{};
     if (FAILED(decoder_->GetInputStreamInfo(0, &inInfo))) {
+      SafeRelease(&decoder_);
       return false;
     }
     inputStreamId_ = 0;
@@ -803,6 +804,7 @@ class H264MftDecoder {
 
     IMFMediaType* inType = nullptr;
     if (FAILED(MFCreateMediaType(&inType))) {
+      SafeRelease(&decoder_);
       return false;
     }
     inType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
@@ -811,10 +813,12 @@ class H264MftDecoder {
     const HRESULT setIn = decoder_->SetInputType(inputStreamId_, inType, 0);
     SafeRelease(&inType);
     if (FAILED(setIn)) {
+      SafeRelease(&decoder_);
       return false;
     }
 
     if (!SetOutputTypeNV12()) {
+      SafeRelease(&decoder_);
       return false;
     }
 
