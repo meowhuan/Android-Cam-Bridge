@@ -177,16 +177,21 @@ class CameraController(
         if (!running.get()) return
         running.set(false)
         micRunning.set(false)
+
+        // Stop camera FIRST so no more frames arrive at the encoder
+        try {
+            ProcessCameraProvider.getInstance(context).get().unbindAll()
+        } catch (_: Throwable) {
+        }
+        // Brief wait for in-flight analyzer callbacks to finish
+        try { Thread.sleep(100) } catch (_: Throwable) {}
+
         videoEncoder?.stop()
         videoEncoder = null
         audioEncoder?.stop()
         audioEncoder = null
         v2Client.close()
 
-        try {
-            ProcessCameraProvider.getInstance(context).get().unbindAll()
-        } catch (_: Throwable) {
-        }
         Log.i("ACB", "stop stream")
     }
 

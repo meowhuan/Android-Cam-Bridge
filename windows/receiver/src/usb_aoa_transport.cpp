@@ -217,12 +217,14 @@ bool RunHidden(const wchar_t* cmdLine, int timeoutMs = 5000) {
 // Sends a broadcast that the ACB app listens for.
 bool TryAoaViaAdb() {
   std::cerr << "[AOA] Device locked by driver, trying ADB fallback...\n";
-  if (RunHidden(L"adb shell am broadcast -a com.acb.androidcam.ACTION_ENTER_AOA")) {
-    std::cerr << "[AOA] ADB broadcast sent, waiting for AOA re-enumeration\n";
-    return true;
-  }
-  std::cerr << "[AOA] ADB fallback failed (adb not available or broadcast failed)\n";
-  return false;
+  // First, kill ADB server to release its hold on the USB device.
+  // This allows the AOA handshake control transfers to proceed.
+  // ADB will auto-restart on next invocation if needed.
+  RunHidden(L"adb kill-server");
+  std::cerr << "[AOA] Killed ADB server to release USB device\n";
+  // Give the OS a moment to release the device handle
+  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+  return true;
 }
 
 bool SendAoaControlTransfer(WINUSB_INTERFACE_HANDLE hWinUsb,
@@ -364,18 +366,28 @@ bool UsbAoaTransport::StartHandshake(const std::wstring& targetDevicePath) {
     if (hDev == INVALID_HANDLE_VALUE) {
       DWORD err = ::GetLastError();
       if (err == ERROR_ACCESS_DENIED || err == ERROR_SHARING_VIOLATION) {
-        // Device is locked by ADB/MTP driver. Try ADB fallback to make
-        // Android enter AOA mode from its side, then wait for re-enumeration.
+        // Device is locked by ADB/MTP driver. Kill ADB server to release
+        // the USB device, then retry the open so we can do normal AOA handshake.
         std::cerr << "[AOA] Device locked (error=" << err
                   << "), trying ADB fallback\n";
-        if (TryAoaViaAdb()) {
-          // Skip WinUSB handshake steps — Android will re-enumerate as AOA
-          goto wait_for_aoa;
+        TryAoaViaAdb();
+
+        // Retry opening the device after ADB released it
+        hDev = CreateFileW(
+            candidate->path.c_str(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
+            nullptr);
+        if (hDev == INVALID_HANDLE_VALUE) {
+          err = ::GetLastError();
+          SetError("device still locked after ADB kill-server (error=" + std::to_string(err)
+                   + "). Try: 1) use Zadig to install WinUSB driver, or "
+                   "2) manually disconnect other USB programs");
+          return false;
         }
-        SetError("device locked by another driver (error=" + std::to_string(err)
-                 + "). Try: 1) use Zadig to install WinUSB driver, or "
-                 "2) ensure ADB is available for fallback");
-        return false;
+        // Fall through to normal WinUSB handshake below
       }
       SetError("CreateFileW failed on candidate, error=" + std::to_string(err));
       return false;
@@ -435,7 +447,7 @@ bool UsbAoaTransport::StartHandshake(const std::wstring& targetDevicePath) {
     // Step 9 - poll for AOA device re-enumeration (up to 8 seconds)
     wait_for_aoa:
     constexpr int kPollIntervalMs = 250;
-    constexpr int kPollTimeoutMs = 8000;
+    constexpr int kPollTimeoutMs = 15000;
     int elapsed = 0;
 
     while (elapsed < kPollTimeoutMs) {

@@ -232,13 +232,21 @@ class V2MediaClient(
             }
             return
         } else if (activeTransport == "usb-aoa") {
-            if (usbAccessoryTransport?.isConnected() == true) {
-                connected.set(true)
-                lastConnectedAtMs.set(System.currentTimeMillis())
-                Log.i("ACB", "USB AOA transport already connected")
-            } else {
-                Log.w("ACB", "USB AOA transport not connected")
+            // AOA transport may not be ready yet (handshake is async on Windows side).
+            // Wait up to 15 seconds for the transport to become available.
+            val deadline = System.currentTimeMillis() + 15_000
+            while (System.currentTimeMillis() < deadline) {
+                if (usbAccessoryTransport?.isConnected() == true) {
+                    connected.set(true)
+                    lastConnectedAtMs.set(System.currentTimeMillis())
+                    Log.i("ACB", "USB AOA transport connected")
+                    emit("USB AOA transport connected")
+                    return
+                }
+                try { Thread.sleep(500) } catch (_: InterruptedException) { return }
             }
+            Log.w("ACB", "USB AOA transport not connected after 15s")
+            emit("USB AOA transport not connected after 15s")
             return
         }
 
