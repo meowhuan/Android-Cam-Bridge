@@ -2,11 +2,15 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
 
 namespace acb::receiver {
+
+class UsbAoaTransport;
 
 struct VideoConfig {
   uint32_t width = 1920;
@@ -83,6 +87,14 @@ class ReceiverServer {
   uint32_t usbLinkExpectedSeq_ = 0;
   uint32_t usbLinkMtu_ = 16384;
   std::string usbLinkLastError_;
+  // USB AOA (true bulk transfer)
+  std::unique_ptr<UsbAoaTransport> usbAoa_;
+  std::mutex usbAoaMutex_;
+  bool usbAoaConnected_ = false;
+  std::string usbAoaLastError_;
+  uint64_t usbAoaRxPackets_ = 0;
+  uint64_t usbAoaRxBytes_ = 0;
+  uint64_t usbAoaLastPacketMs_ = 0;
   bool mfStarted_ = false;
 
   void AcceptLoop();

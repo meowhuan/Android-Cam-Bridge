@@ -117,6 +117,28 @@ public class ReceiverApiClient
         return await resp.Content.ReadAsStringAsync();
     }
 
+    public async Task<string> UsbAoaConnectAsync(string devicePath = "")
+    {
+        var json = string.IsNullOrEmpty(devicePath) ? "{}" : $"{{\"devicePath\":\"{devicePath}\"}}";
+        var resp = await _http.PostAsync(
+            BuildUri("/api/v2/usb-aoa/connect"),
+            new StringContent(json, Encoding.UTF8, "application/json"));
+        return await resp.Content.ReadAsStringAsync();
+    }
+
+    public async Task<string> UsbAoaDisconnectAsync()
+    {
+        var resp = await _http.PostAsync(
+            BuildUri("/api/v2/usb-aoa/disconnect"),
+            new StringContent("{}", Encoding.UTF8, "application/json"));
+        return await resp.Content.ReadAsStringAsync();
+    }
+
+    public async Task<string> GetUsbAoaStatusAsync()
+    {
+        return await _http.GetStringAsync(BuildUri("/api/v2/usb-aoa/status"));
+    }
+
     private Uri BuildUri(string path)
     {
         return new(_baseUri, path);

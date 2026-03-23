@@ -4,6 +4,9 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+
+#include "usb_aoa_transport.h"
+
 #include <setupapi.h>
 #include <initguid.h>
 #include <usbiodef.h>
@@ -1189,6 +1192,113 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
     return Json(200, body.str());
   }
 
+  if (req.method == "POST" && req.path == "/api/v2/usb-aoa/connect") {
+    const std::string devicePath = JsonField(req.body, "devicePath", "");
+    // Stop any existing AOA connection
+    if (usbAoa_) {
+      usbAoa_->Stop();
+      usbAoa_.reset();
+    }
+    // Create new AOA transport with callback to ProcessV2MediaPacket
+    usbAoa_ = std::make_unique<UsbAoaTransport>(
+        [this](const uint8_t* data, size_t size) {
+          ProcessV2MediaPacket(data, size);
+          std::lock_guard<std::mutex> lock(usbAoaMutex_);
+          usbAoaRxPackets_ += 1;
+          usbAoaRxBytes_ += size;
+          usbAoaLastPacketMs_ = NowMs();
+        });
+    std::wstring wDevicePath;
+    if (!devicePath.empty()) {
+      int wlen = MultiByteToWideChar(CP_UTF8, 0, devicePath.c_str(), -1, nullptr, 0);
+      if (wlen > 0) {
+        wDevicePath.resize(wlen - 1);
+        MultiByteToWideChar(CP_UTF8, 0, devicePath.c_str(), -1, &wDevicePath[0], wlen);
+      }
+    }
+    const bool ok = usbAoa_->StartHandshake(wDevicePath);
+    if (ok) {
+      {
+        std::lock_guard<std::mutex> lock(usbAoaMutex_);
+        usbAoaConnected_ = true;
+        usbAoaLastError_.clear();
+        usbAoaRxPackets_ = 0;
+        usbAoaRxBytes_ = 0;
+        usbAoaLastPacketMs_ = 0;
+      }
+      usbAoa_->StartBulkRead();
+    } else {
+      std::lock_guard<std::mutex> lock(usbAoaMutex_);
+      usbAoaConnected_ = false;
+      usbAoaLastError_ = usbAoa_ ? usbAoa_->GetLastError() : "unknown_error";
+    }
+    std::ostringstream body;
+    body << "{\"ok\":" << (ok ? "true" : "false");
+    if (usbAoa_) {
+      body << ",\"state\":\"" << (ok ? "connected" : "error") << "\"";
+      body << ",\"devicePath\":\"" << JsonEscape(usbAoa_->GetDevicePath()) << "\"";
+      if (!ok) {
+        body << ",\"error\":\"" << JsonEscape(usbAoa_->GetLastError()) << "\"";
+      }
+    }
+    body << "}";
+    return Json(ok ? 200 : 503, body.str());
+  }
+
+  if (req.method == "POST" && req.path == "/api/v2/usb-aoa/disconnect") {
+    if (usbAoa_) {
+      usbAoa_->Stop();
+      usbAoa_.reset();
+    }
+    {
+      std::lock_guard<std::mutex> lock(usbAoaMutex_);
+      usbAoaConnected_ = false;
+      usbAoaLastError_.clear();
+    }
+    return Json(200, R"({"ok":true})");
+  }
+
+  if (req.method == "GET" && req.path == "/api/v2/usb-aoa/status") {
+    bool connected = false;
+    std::string lastError;
+    uint64_t rxPackets = 0;
+    uint64_t rxBytes = 0;
+    uint64_t lastPacketMs = 0;
+    std::string state = "disconnected";
+    std::string devicePath;
+    {
+      std::lock_guard<std::mutex> lock(usbAoaMutex_);
+      connected = usbAoaConnected_;
+      lastError = usbAoaLastError_;
+      rxPackets = usbAoaRxPackets_;
+      rxBytes = usbAoaRxBytes_;
+      lastPacketMs = usbAoaLastPacketMs_;
+      if (usbAoa_) {
+        auto aoaState = usbAoa_->GetState();
+        switch (aoaState) {
+          case AoaState::Disconnected: state = "disconnected"; break;
+          case AoaState::Handshaking: state = "handshaking"; break;
+          case AoaState::Connected: state = "connected"; break;
+          case AoaState::Error: state = "error"; break;
+        }
+        devicePath = usbAoa_->GetDevicePath();
+        if (lastError.empty()) {
+          lastError = usbAoa_->GetLastError();
+        }
+      }
+    }
+    std::ostringstream body;
+    body << "{\"connected\":" << (connected ? "true" : "false")
+         << ",\"state\":\"" << state << "\""
+         << ",\"devicePath\":\"" << JsonEscape(devicePath) << "\""
+         << ",\"rxPackets\":" << rxPackets
+         << ",\"rxBytes\":" << rxBytes
+         << ",\"lastPacketMs\":" << lastPacketMs
+         << ",\"lastError\":\"" << JsonEscape(lastError) << "\""
+         << "}";
+    return Json(200, body.str());
+  }
+
   if (req.method == "POST" && req.path == "/api/v2/usb-native/handshake") {
     const std::string sessionId = JsonField(req.body, "sessionId", "");
     const std::string devicePath = JsonField(req.body, "devicePath", "");
@@ -1355,6 +1465,13 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
         usbLinkMtu_ = 16384;
         usbLinkLastError_.clear();
       }
+    } else if (transport == "usb-aoa") {
+      // USB AOA uses bulk transfer, no RNDIS/ADB needed
+      // The AOA connection should already be established via /api/v2/usb-aoa/connect
+      std::lock_guard<std::mutex> lock(usbAoaMutex_);
+      if (!usbAoaConnected_ || !usbAoa_ || !usbAoa_->IsConnected()) {
+        return Json(503, R"({"error":"usb_aoa_not_connected","hint":"call POST /api/v2/usb-aoa/connect first"})");
+      }
     }
     activeTransport_ = transport;
     activeSessionId_ = "sess_v2_" + std::to_string(NowMs());
@@ -1377,6 +1494,11 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
       std::lock_guard<std::mutex> lock(usbLinkMutex_);
       body << ",\"usbLink\":{\"active\":" << (usbLinkActive_ ? "true" : "false")
            << ",\"hint\":\"call /api/v2/usb-native/handshake\"}";
+    }
+    if (transport == "usb-aoa") {
+      std::lock_guard<std::mutex> lock(usbAoaMutex_);
+      body << ",\"usbAoa\":{\"connected\":" << (usbAoaConnected_ ? "true" : "false")
+           << ",\"hint\":\"media frames are received via USB bulk transfer\"}";
     }
     body << "}";
     return Json(200, body.str());
@@ -1417,6 +1539,14 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
       usbLinkRxBytes_ = 0;
       usbLinkExpectedSeq_ = 0;
       usbLinkLastError_.clear();
+    }
+    {
+      std::lock_guard<std::mutex> lock(usbAoaMutex_);
+      if (activeTransport_ == "usb-aoa" && usbAoa_) {
+        usbAoa_->Stop();
+        usbAoa_.reset();
+        usbAoaConnected_ = false;
+      }
     }
     return Json(200, R"({"ok":true})");
   }
@@ -1811,20 +1941,29 @@ void ReceiverServer::AcceptLoop() {
       }
     }
 
-    ParsedRequest parsed;
-    if (ParseRequest(request, &parsed)) {
-      const auto upIt = parsed.headers.find("upgrade");
-      if (parsed.path.rfind("/ws/v2/media", 0) == 0 && upIt != parsed.headers.end() &&
-          ToLower(upIt->second).find("websocket") != std::string::npos) {
-        HandleWebSocketV2(static_cast<uintptr_t>(client), request);
-        closesocket(client);
-        continue;
-      }
-    }
+    // Dispatch each connection to its own thread so the accept loop is never blocked.
+    // This is critical: HandleWebSocketV2 runs an infinite recv loop, so if called
+    // inline it would prevent all subsequent HTTP requests (including OBS frame polls).
+    std::thread([this, client, request]() {
+      CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
-    const std::string response = HandleRequest(request);
-    send(client, response.data(), static_cast<int>(response.size()), 0);
-    closesocket(client);
+      ParsedRequest parsed;
+      if (ParseRequest(request, &parsed)) {
+        const auto upIt = parsed.headers.find("upgrade");
+        if (parsed.path.rfind("/ws/v2/media", 0) == 0 && upIt != parsed.headers.end() &&
+            ToLower(upIt->second).find("websocket") != std::string::npos) {
+          HandleWebSocketV2(static_cast<uintptr_t>(client), request);
+          closesocket(client);
+          CoUninitialize();
+          return;
+        }
+      }
+
+      const std::string response = HandleRequest(request);
+      send(client, response.data(), static_cast<int>(response.size()), 0);
+      closesocket(client);
+      CoUninitialize();
+    }).detach();
   }
 }
 

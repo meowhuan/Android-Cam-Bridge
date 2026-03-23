@@ -1,0 +1,44 @@
+; Android Cam Bridge - AOA WinUSB Driver
+; Binds WinUSB to Android Open Accessory devices (Google VID 0x18D1)
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = USBDevice
+ClassGUID   = {88BAE032-5A81-49f0-BC3D-A4FF138216D6}
+Provider    = %ManufacturerName%
+DriverVer   = 03/23/2026,1.0.0.0
+PnpLockDown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64,NTx86
+
+[Standard.NTamd64]
+%DeviceName_Acc%    = USB_Install, USB\VID_18D1&PID_2D00
+%DeviceName_AccAdb% = USB_Install, USB\VID_18D1&PID_2D01
+
+[Standard.NTx86]
+%DeviceName_Acc%    = USB_Install, USB\VID_18D1&PID_2D00
+%DeviceName_AccAdb% = USB_Install, USB\VID_18D1&PID_2D01
+
+[USB_Install]
+Include = winusb.inf
+Needs   = WINUSB.NT
+
+[USB_Install.Services]
+Include = winusb.inf
+Needs   = WINUSB.NT.Services
+
+[USB_Install.HW]
+AddReg = Dev_AddReg
+
+[Dev_AddReg]
+; Device interface GUID for WinUSB access
+HKR,,DeviceInterfaceGUIDs,0x10000,"{A1B2C3D4-E5F6-7890-ABCD-EF1234567891}"
+
+[Strings]
+ManufacturerName = "Android Cam Bridge"
+DeviceName_Acc    = "ACB AOA Device"
+DeviceName_AccAdb = "ACB AOA Device (ADB)"

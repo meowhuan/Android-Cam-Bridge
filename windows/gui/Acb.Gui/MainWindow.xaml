@@ -41,6 +41,7 @@
                         <ComboBox x:Name="TransportBox" SelectedIndex="0" SelectionChanged="OnTransportChanged">
                             <ComboBoxItem x:Name="TransportUsbItem" Tag="usb-adb" Content="usb-adb" />
                             <ComboBoxItem x:Name="TransportUsbNativeItem" Tag="usb-native" Content="usb-native" />
+                            <ComboBoxItem x:Name="TransportUsbAoaItem" Tag="usb-aoa" Content="usb-aoa" />
                             <ComboBoxItem x:Name="TransportLanItem" Tag="lan" Content="lan" />
                         </ComboBox>
                     </StackPanel>
@@ -135,6 +136,21 @@
                         <TextBox x:Name="UsbNativeSelectedDeviceBox" IsReadOnly="True" PlaceholderText="selected device path" />
                         <TextBox x:Name="UsbNativeStatusBox" IsReadOnly="True" TextWrapping="Wrap" PlaceholderText="usb-native status" />
                         <TextBox x:Name="UsbNativeLinkBox" IsReadOnly="True" TextWrapping="Wrap" PlaceholderText="usb-native link" />
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="UsbAoaPanel" BorderThickness="1" BorderBrush="#33FFFFFF" CornerRadius="8" Padding="8" Visibility="Collapsed">
+                    <StackPanel Spacing="6">
+                        <TextBlock x:Name="UsbAoaPanelTitleText" Text="USB AOA Panel" FontWeight="SemiBold" />
+                        <Grid ColumnSpacing="6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0" x:Name="UsbAoaConnectButton" Content="AOA Connect" Click="OnUsbAoaConnect" />
+                            <Button Grid.Column="1" x:Name="UsbAoaDisconnectButton" Content="AOA Disconnect" Click="OnUsbAoaDisconnect" />
+                        </Grid>
+                        <TextBox x:Name="UsbAoaStatusBox" IsReadOnly="True" TextWrapping="Wrap" PlaceholderText="usb-aoa status" />
                     </StackPanel>
                 </Border>
 

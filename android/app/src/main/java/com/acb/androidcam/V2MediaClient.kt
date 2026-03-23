@@ -54,6 +54,7 @@ class V2MediaClient(
     private var usbNativeLinkId = ""
     private val usbSeq = AtomicLong(0)
     private val usbPacketCount = AtomicLong(0)
+    @Volatile private var usbAccessoryTransport: UsbAccessoryTransport? = null
 
     data class SessionInfo(
         val sessionId: String,
@@ -65,6 +66,12 @@ class V2MediaClient(
         this.activeTransport = transport
         val initial = normalizeReceiverAddress(receiverAddress)
         this.receiverAddress = initial
+
+        // USB AOA doesn't need HTTP session handshake — media goes over bulk pipe
+        if (transport == "usb-aoa") {
+            sessionId = "usb-aoa-direct"
+            return SessionInfo("usb-aoa-direct", "", "")
+        }
 
         val first = startSessionOnce(initial, transport)
         if (first != null) return first
@@ -224,6 +231,15 @@ class V2MediaClient(
                 onDebugEvent?.invoke("usb-native link handshake failed")
             }
             return
+        } else if (activeTransport == "usb-aoa") {
+            if (usbAccessoryTransport?.isConnected() == true) {
+                connected.set(true)
+                lastConnectedAtMs.set(System.currentTimeMillis())
+                Log.i("ACB", "USB AOA transport already connected")
+            } else {
+                Log.w("ACB", "USB AOA transport not connected")
+            }
+            return
         }
 
         if (wsUrl.isBlank()) return
@@ -279,6 +295,8 @@ class V2MediaClient(
         System.arraycopy(payload, 0, packet, 24, payload.size)
         if (activeTransport == "usb-native") {
             sendUsbNativePacket(packet)
+        } else if (activeTransport == "usb-aoa") {
+            usbAccessoryTransport?.sendFrame(packet)
         } else {
             ws?.send(ByteString.of(*packet))
         }
@@ -369,5 +387,11 @@ class V2MediaClient(
         } catch (_: Throwable) {
         }
         connected.set(false)
+        usbAccessoryTransport?.close()
+        usbAccessoryTransport = null
+    }
+
+    fun setUsbAccessoryTransport(transport: UsbAccessoryTransport?) {
+        usbAccessoryTransport = transport
     }
 }

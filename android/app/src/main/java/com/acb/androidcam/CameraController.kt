@@ -38,7 +38,7 @@ class CameraController(
     private val previewView: PreviewView?,
     private val onDebugEvent: ((String) -> Unit)? = null,
 ) {
-    enum class TransportMode { LAN, USB_ADB, USB_NATIVE }
+    enum class TransportMode { LAN, USB_ADB, USB_NATIVE, USB_AOA }
 
     private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val uploadExecutor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -74,6 +74,7 @@ class CameraController(
         currentReceiver = when {
             normalizedReceiver.isNotBlank() -> normalizedReceiver
             transport == TransportMode.USB_NATIVE -> ""
+            transport == TransportMode.USB_AOA -> ""
             else -> "127.0.0.1:39393"
         }
         targetWidth = width
@@ -88,6 +89,7 @@ class CameraController(
             TransportMode.LAN -> "lan"
             TransportMode.USB_NATIVE -> "usb-native"
             TransportMode.USB_ADB -> "usb-adb"
+            TransportMode.USB_AOA -> "usb-aoa"
         }
         startSessionLoop(
             transportName = transportName,
@@ -188,6 +190,10 @@ class CameraController(
             return true
         }
         return v2Client.isConnected()
+    }
+
+    fun attachUsbAccessoryTransport(transport: UsbAccessoryTransport?) {
+        v2Client.setUsbAccessoryTransport(transport)
     }
 
     private data class AudioFxBundle(
@@ -415,7 +421,7 @@ class CameraController(
     private fun shouldPushLegacyHttp(): Boolean {
         // Keep legacy path only as bootstrap fallback.
         // Once v2 is up, disable v1 to avoid dual-path contention and latency spikes.
-        return currentMode != TransportMode.USB_NATIVE && !v2Client.isConnected()
+        return currentMode != TransportMode.USB_NATIVE && currentMode != TransportMode.USB_AOA && !v2Client.isConnected()
     }
 
     private fun startSessionLoop(
