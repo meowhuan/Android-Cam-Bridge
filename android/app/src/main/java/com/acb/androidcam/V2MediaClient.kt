@@ -44,7 +44,7 @@ class V2MediaClient(
         .writeTimeout(220, TimeUnit.MILLISECONDS)
         .build()
 
-    private var ws: WebSocket? = null
+    @Volatile private var ws: WebSocket? = null
     private val connected = AtomicBoolean(false)
     private val frameIndex = AtomicLong(0)
     private val lastConnectedAtMs = AtomicLong(0)

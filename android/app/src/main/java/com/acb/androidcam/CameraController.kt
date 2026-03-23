@@ -109,7 +109,7 @@ class CameraController(
                 .setTargetResolution(android.util.Size(width, height))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
 
-            @androidx.camera.camera2.interop.ExperimentalCamera2Interop
+            @Suppress("UnsafeOptInUsageError")
             Camera2Interop.Extender(analysisBuilder)
                 .setCaptureRequestOption(
                     android.hardware.camera2.CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,

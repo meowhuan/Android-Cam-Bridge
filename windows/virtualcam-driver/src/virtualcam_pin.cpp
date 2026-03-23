@@ -863,8 +863,8 @@ void VirtualCamPin::ThreadProc() {
 
         ++frameNumber;
 
-        // Poll shared memory more frequently to reduce display latency
-        if (WaitForSingleObject(stopEvent_, 16) == WAIT_OBJECT_0) {
+        // Poll at ~30fps matching AvgTimePerFrame=333333 (30fps)
+        if (WaitForSingleObject(stopEvent_, 33) == WAIT_OBJECT_0) {
             break;
         }
     }

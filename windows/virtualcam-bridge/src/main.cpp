@@ -42,7 +42,7 @@ constexpr uint32_t kMaxFrameBytes = 3840 * 2160 * 4;
 struct BridgeState {
   std::mutex mu;
   std::string receiverHostPort = "127.0.0.1:39393";
-  uint32_t pollIntervalMs = 8;
+  uint32_t pollIntervalMs = 16;
   bool streaming = false;
   bool exitRequested = false;
   uint64_t frames = 0;

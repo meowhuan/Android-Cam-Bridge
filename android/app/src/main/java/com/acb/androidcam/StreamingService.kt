@@ -32,6 +32,7 @@ class StreamingService : LifecycleService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
             ACTION_START -> {
                 cfgTransport = intent.getStringExtra(EXTRA_TRANSPORT) ?: "usb-adb"
@@ -96,7 +97,12 @@ class StreamingService : LifecycleService() {
         if (!running) return
         controller?.stop()
         running = false
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        @Suppress("DEPRECATION")
+        if (Build.VERSION.SDK_INT >= 33) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            stopForeground(true)
+        }
         broadcastStatus("stopped", reason)
     }
 

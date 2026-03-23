@@ -6,7 +6,6 @@ import android.media.MediaFormat
 import android.graphics.Rect
 import androidx.camera.core.ImageProxy
 import kotlin.math.min
-import java.nio.ByteBuffer
 
 class VideoAvcEncoder(
     private val width: Int,
@@ -16,15 +15,14 @@ class VideoAvcEncoder(
 ) {
     private val codec: MediaCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
     private val bufferInfo = MediaCodec.BufferInfo()
-    private var frameIndex: Long = 0
-    private val fpsValue: Int = if (fps > 0) fps else 30
     private var codecConfig: ByteArray? = null
 
     init {
+        val safeFps = if (fps > 0) fps else 30
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-            setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+            setInteger(MediaFormat.KEY_FRAME_RATE, safeFps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
             setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
             if (android.os.Build.VERSION.SDK_INT >= 23) {
