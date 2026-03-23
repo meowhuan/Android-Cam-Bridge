@@ -34,7 +34,8 @@ class VideoAvcEncoder(
     fun encode(image: ImageProxy, onEncoded: (ByteArray, Boolean) -> Unit) {
         val input = codec.dequeueInputBuffer(0)
         if (input >= 0) {
-            val inBuf = codec.getInputBuffer(input) ?: return
+            val inBuf = codec.getInputBuffer(input)
+            if (inBuf != null) {
                 val i420 = imageToI420(image)
                 inBuf.clear()
                 if (inBuf.capacity() >= i420.size) {
@@ -44,7 +45,10 @@ class VideoAvcEncoder(
                 } else {
                     codec.queueInputBuffer(input, 0, 0, 0, 0)
                 }
+            } else {
+                codec.queueInputBuffer(input, 0, 0, 0, 0)
             }
+        }
 
         while (true) {
             val outIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
