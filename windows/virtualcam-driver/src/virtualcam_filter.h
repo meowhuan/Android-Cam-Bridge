@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <strmif.h>
 #include <uuids.h>
+#include <vfwmsgs.h>
 
 // Forward declarations
 class VirtualCamPin;

@@ -7,6 +7,14 @@
 #include <algorithm>
 #include <new>
 
+// DirectShow / KsProxy error codes that may not be in all SDK versions
+#ifndef E_PROP_SET_UNSUPPORTED
+#define E_PROP_SET_UNSUPPORTED  _HRESULT_TYPEDEF_(0x80070492L)
+#endif
+#ifndef E_PROP_ID_UNSUPPORTED
+#define E_PROP_ID_UNSUPPORTED   _HRESULT_TYPEDEF_(0x80070493L)
+#endif
+
 // We need AMPROPERTY_PIN_CATEGORY from vidcap.h / ksproxy
 #ifndef AMPROPERTY_PIN_CATEGORY
 #define AMPROPERTY_PIN_CATEGORY 0

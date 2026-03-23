@@ -6,6 +6,7 @@
 #include <ks.h>
 #include <ksmedia.h>
 #include <ksproxy.h>
+#include <cstdio>
 #include <new>
 
 // Define our own CLSID here (initguid.h must NOT be included globally

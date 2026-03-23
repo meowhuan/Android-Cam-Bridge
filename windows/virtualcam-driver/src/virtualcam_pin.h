@@ -4,6 +4,8 @@
 #include <strmif.h>
 #include <amvideo.h>
 #include <uuids.h>
+#include <vfwmsgs.h>
+#include <dvdmedia.h>
 #include <ks.h>
 #include <ksmedia.h>
 #include <ksproxy.h>

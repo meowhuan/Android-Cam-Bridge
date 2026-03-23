@@ -321,14 +321,14 @@ bool UsbAoaTransport::StartHandshake(const std::wstring& targetDevicePath) {
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
         nullptr);
     if (hDev == INVALID_HANDLE_VALUE) {
-      DWORD err = GetLastError();
+      DWORD err = ::GetLastError();
       SetError("CreateFileW failed on candidate, error=" + std::to_string(err));
       return false;
     }
 
     WINUSB_INTERFACE_HANDLE hWinUsbTemp = nullptr;
     if (!WinUsb_Initialize(hDev, &hWinUsbTemp)) {
-      DWORD err = GetLastError();
+      DWORD err = ::GetLastError();
       CloseHandle(hDev);
       SetError("WinUsb_Initialize failed on candidate, error="
                + std::to_string(err));
@@ -352,7 +352,7 @@ bool UsbAoaTransport::StartHandshake(const std::wstring& targetDevicePath) {
       uint16_t len = static_cast<uint16_t>(std::strlen(str)); // exclude NUL
       if (!SendAoaControlTransfer(hWinUsbTemp, AOA_SEND_STRING,
                                   idx, str, len)) {
-        DWORD err = GetLastError();
+        DWORD err = ::GetLastError();
         WinUsb_Free(hWinUsbTemp);
         CloseHandle(hDev);
         SetError("SEND_STRING failed for index " + std::to_string(idx)
@@ -365,7 +365,7 @@ bool UsbAoaTransport::StartHandshake(const std::wstring& targetDevicePath) {
     // Step 7 - START_ACCESSORY
     if (!SendAoaControlTransfer(hWinUsbTemp, AOA_START_ACCESSORY,
                                 0, nullptr, 0)) {
-      DWORD err = GetLastError();
+      DWORD err = ::GetLastError();
       WinUsb_Free(hWinUsbTemp);
       CloseHandle(hDev);
       SetError("START_ACCESSORY failed, error=" + std::to_string(err));
@@ -424,14 +424,14 @@ open_aoa_device:
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
         nullptr);
     if (hDevice_ == INVALID_HANDLE_VALUE) {
-      DWORD err = GetLastError();
+      DWORD err = ::GetLastError();
       SetError("CreateFileW failed on AOA device, error="
                + std::to_string(err));
       return false;
     }
 
     if (!WinUsb_Initialize(hDevice_, &hWinUsb_)) {
-      DWORD err = GetLastError();
+      DWORD err = ::GetLastError();
       CloseHandle(hDevice_);
       hDevice_ = INVALID_HANDLE_VALUE;
       SetError("WinUsb_Initialize failed on AOA device, error="
@@ -442,7 +442,7 @@ open_aoa_device:
     // Step 11 - enumerate endpoints to find bulk IN and OUT
     USB_INTERFACE_DESCRIPTOR ifDesc{};
     if (!WinUsb_QueryInterfaceSettings(hWinUsb_, 0, &ifDesc)) {
-      DWORD err = GetLastError();
+      DWORD err = ::GetLastError();
       CloseHandles();
       SetError("WinUsb_QueryInterfaceSettings failed, error="
                + std::to_string(err));
@@ -579,7 +579,7 @@ void UsbAoaTransport::BulkReadLoop() {
         &bytesRead, nullptr);
 
     if (!ok) {
-      DWORD err = GetLastError();
+      DWORD err = ::GetLastError();
 
       if (err == ERROR_SEM_TIMEOUT) {
         // Timeout is normal under no-data conditions; keep trying

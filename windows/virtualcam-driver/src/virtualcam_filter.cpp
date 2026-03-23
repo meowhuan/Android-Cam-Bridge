@@ -5,6 +5,10 @@
 #include <cstring>
 #include <new>
 
+#ifndef MAX_FILTER_CHARS
+#define MAX_FILTER_CHARS 128
+#endif
+
 // ===========================================================================
 // EnumPins implementation
 // ===========================================================================
