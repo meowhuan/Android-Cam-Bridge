@@ -216,14 +216,14 @@ bool RunHidden(const wchar_t* cmdLine, int timeoutMs = 5000) {
 // Fallback: use ADB to trigger Android-side AOA mode entry.
 // Sends a broadcast that the ACB app listens for.
 bool TryAoaViaAdb() {
-  std::cerr << "[AOA] Device locked by driver, trying ADB fallback...\n";
-  // First, kill ADB server to release its hold on the USB device.
-  // This allows the AOA handshake control transfers to proceed.
-  // ADB will auto-restart on next invocation if needed.
+  std::cerr << "[AOA] Device locked by driver, killing ADB to release USB...\n";
+  // adb kill-server is polite but may not release handles immediately.
+  // Force-kill all adb.exe processes to guarantee USB device release.
   RunHidden(L"adb kill-server");
-  std::cerr << "[AOA] Killed ADB server to release USB device\n";
-  // Give the OS a moment to release the device handle
-  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+  RunHidden(L"taskkill /f /im adb.exe");
+  std::cerr << "[AOA] ADB processes killed\n";
+  // Give the OS time to fully release USB device handles
+  std::this_thread::sleep_for(std::chrono::milliseconds(2000));
   return true;
 }
 
@@ -366,31 +366,56 @@ bool UsbAoaTransport::StartHandshake(const std::wstring& targetDevicePath) {
     if (hDev == INVALID_HANDLE_VALUE) {
       DWORD err = ::GetLastError();
       if (err == ERROR_ACCESS_DENIED || err == ERROR_SHARING_VIOLATION) {
-        // Device is locked by ADB/MTP driver. Kill ADB server to release
-        // the USB device, then retry the open so we can do normal AOA handshake.
+        // Device is locked by ADB/MTP driver. Kill ADB to release USB.
         std::cerr << "[AOA] Device locked (error=" << err
                   << "), trying ADB fallback\n";
         TryAoaViaAdb();
 
-        // Retry opening the device after ADB released it
-        hDev = CreateFileW(
-            candidate->path.c_str(),
-            GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            nullptr, OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
-            nullptr);
-        if (hDev == INVALID_HANDLE_VALUE) {
+        // Retry opening the device — may need multiple attempts as
+        // the OS takes time to fully release USB handles after process kill.
+        for (int retry = 0; retry < 10; ++retry) {
+          // Re-enumerate to get fresh device paths (driver rebind can change them)
+          auto freshDevices = EnumerateUsbDevices();
+          const EnumDevice* freshCandidate = nullptr;
+          for (const auto& d : freshDevices) {
+            if (LooksLikeAndroid(d.description) ||
+                LooksLikeAndroid(d.hardwareId) ||
+                LooksLikeAndroid(d.pathUtf8)) {
+              freshCandidate = &d;
+              break;
+            }
+          }
+          const auto& openPath = freshCandidate ? freshCandidate->path : candidate->path;
+
+          hDev = CreateFileW(
+              openPath.c_str(),
+              GENERIC_READ | GENERIC_WRITE,
+              FILE_SHARE_READ | FILE_SHARE_WRITE,
+              nullptr, OPEN_EXISTING,
+              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
+              nullptr);
+          if (hDev != INVALID_HANDLE_VALUE) {
+            std::cerr << "[AOA] Device opened on retry " << (retry + 1) << "\n";
+            break;
+          }
           err = ::GetLastError();
-          SetError("device still locked after ADB kill-server (error=" + std::to_string(err)
+          std::cerr << "[AOA] Retry " << (retry + 1)
+                    << "/10 CreateFileW error=" << err << "\n";
+          std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
+
+        if (hDev == INVALID_HANDLE_VALUE) {
+          SetError("device still locked after ADB kill + 10 retries (error="
+                   + std::to_string(err)
                    + "). Try: 1) use Zadig to install WinUSB driver, or "
                    "2) manually disconnect other USB programs");
           return false;
         }
         // Fall through to normal WinUSB handshake below
+      } else {
+        SetError("CreateFileW failed on candidate, error=" + std::to_string(err));
+        return false;
       }
-      SetError("CreateFileW failed on candidate, error=" + std::to_string(err));
-      return false;
     }
 
     WINUSB_INTERFACE_HANDLE hWinUsbTemp = nullptr;
