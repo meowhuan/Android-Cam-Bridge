@@ -6,6 +6,7 @@
 - `release.yml`
 
 当前预发行版基线：`v1.2.0-beta.1`
+当前候选预发行版：`v1.2.0-beta.4`
 
 ## `ci.yml`
 
@@ -133,8 +134,42 @@ pwsh .\scripts\sign-aoa-driver.ps1 `
 当前预发行版可直接使用：
 
 ```powershell
-git tag v1.2.0-beta.1
-git push origin v1.2.0-beta.1
+git tag v1.2.0-beta.4
+git push origin v1.2.0-beta.4
 ```
 
 后续正式版或新的 beta/rc，请按同样规则推送 `v*` tag。
+
+## v1.2.0-beta.4 regression checklist
+
+Android manual regression:
+
+- [ ] 横屏下空闲预览与推流预览方向、裁切和视野保持一致。
+- [ ] 竖屏下预览区不会被控制区完全挤占，至少保留可用取景区域。
+- [ ] 前台推流时切换手电筒能够稳定生效，且不会导致推流中断。
+- [ ] 后台持续采集推流时切换手电筒后，服务能按新参数重新进入稳定推流状态。
+- [ ] USB AOA 模式下，从未连接、已连接、断开重连三个状态切换后仍可正常启动推流。
+- [ ] 低光 / 60 FPS / 标准 30 FPS 三类 profile 的 `actual profile` 显示与实际行为一致。
+- [ ] 推流过程中修改分辨率 / 模式时，界面状态与真实流参数不会出现误导性不一致。
+
+Windows GUI manual regression:
+
+- [ ] GUI 退出时不会卡死，托管的 receiver / virtualcam bridge 能被正确回收。
+- [ ] 顶部标题栏文本、版本 chip、渠道 chip 与系统窗口按钮保持稳定对齐。
+- [ ] 虚拟摄像头控制面板可以完成启动、停止、状态刷新与 receiver override。
+- [ ] 结构化日志视图可以正常追加、筛选、清空且不会阻塞 UI。
+- [ ] 版本号与渠道显示能正确区分 `-beta/-preview/-rc` 和正式版。
+
+Packaging / release regression:
+
+- [ ] `scripts/package.ps1` 在当前机器上能复用已有 CMake 生成器并成功完成 payload 打包。
+- [ ] `scripts/build-local.ps1 -Mode installer` 能完成本地安装器构建。
+- [ ] `release.yml` 构建出的 GUI 版本号与 tag 一致。
+- [ ] 安装器内包含 receiver、virtualcam bridge、virtual camera driver、AOA driver 以及 GUI payload。
+
+Current known regression items before finalizing beta.4:
+
+- [ ] `scripts/build-local.ps1 -AllowStubPlugin` 目前仍会在 OBS SDK 路径检查阶段提前失败，stub fallback 没有真正生效。
+- [ ] WinUI 自定义标题栏的左右 inset 目前只在初次激活时计算一次，窗口度量变化后可能继续出现对齐漂移。
+- [ ] Android 在“正在推流”时修改分辨率 / 模式，界面文案会先变化，但真实流参数不会同步重配。
+- [ ] Android 竖屏布局仍使用 `previewStage minHeight=220dp` 和 `controlsPanel height=320dp` 的硬编码尺寸，需要继续做响应式收口。

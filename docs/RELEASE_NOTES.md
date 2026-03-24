@@ -2,7 +2,21 @@
 
 ## Unreleased
 
-- No unreleased notes yet on top of `v1.2.0-beta.1`.
+- No unreleased notes yet on top of `v1.2.0-beta.4`.
+
+## v1.2.0-beta.4 (2026-03-24)
+
+- Reworked Android capture around a dedicated Camera2 surface pipeline with profile-aware resolution/FPS selection.
+- Added separate idle preview and live stream preview flows on Android, with optional background streaming and richer runtime status text.
+- Added Android capture mode presets for latency, balanced, and low-light streaming, plus improved actual-profile reporting.
+- Improved Android USB AOA attach/reconnect behavior and expanded app-side runtime logging.
+- Added live virtual camera controls to the Windows GUI, including bridge start/stop, receiver override, polling interval, and status refresh.
+- Reworked the Windows GUI shell with a streamlined navigation layout, structured logs view, localized summary cards, and build identity display.
+- Fixed Windows GUI shutdown flow so managed receiver and virtual camera helper processes are stopped more reliably on exit.
+- Improved local Windows packaging by auto-detecting the active CMake Visual Studio generator instead of hard-coding VS 2022.
+- Passed release version metadata into the published GUI so the app version/channel display matches packaged beta/preview builds.
+- Reused an existing VC++ redistributable payload during local packaging instead of forcing a re-download every time.
+- Fixed BOM-prefixed commands in the virtual camera bridge control pipe so `START/STOP/STATUS/EXIT` commands are parsed reliably.
 
 ## v1.2.0-beta.1 (2026-03-23)
 
