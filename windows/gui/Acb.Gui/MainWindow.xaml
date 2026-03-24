@@ -2,42 +2,265 @@
     x:Class="Acb.Gui.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="ACB Receiver">
-    <Grid>
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="430" />
-            <ColumnDefinition Width="*" />
-        </Grid.ColumnDefinitions>
+    Title="Android Cam Bridge">
+    <Grid Background="{ThemeResource AppChromeBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="44" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
 
-        <ScrollViewer Grid.Column="0" Padding="20,20,12,20" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <StackPanel Spacing="10">
-                <TextBlock x:Name="AppTitleText" Text="ACB Receiver" FontSize="26" FontWeight="SemiBold" />
-                <TextBlock x:Name="ConnectionTitleText" Text="Connection" FontSize="16" Opacity="0.8" />
+        <Grid x:Name="WindowTitleBar"
+              Grid.Row="0"
+              Height="40"
+              Margin="14,2,14,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="TitleBarLeftInsetColumn" Width="0" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition x:Name="TitleBarRightInsetColumn" Width="0" />
+            </Grid.ColumnDefinitions>
 
-                <TextBlock x:Name="LanguageLabelText" Text="Language" Opacity="0.75" />
-                <ComboBox x:Name="LanguageBox" SelectionChanged="OnLanguageChanged" SelectedIndex="0">
-                    <ComboBoxItem Tag="auto" Content="Auto" />
-                    <ComboBoxItem Tag="zh-CN" Content="简体中文" />
-                    <ComboBoxItem Tag="en-US" Content="English" />
-                </ComboBox>
+            <StackPanel Grid.Column="1"
+                        Orientation="Horizontal"
+                        VerticalAlignment="Center"
+                        Spacing="10"
+                        Margin="12,-2,0,0">
+                <TextBlock x:Name="TitleBarAppNameText"
+                           Text="Android Cam Bridge"
+                           FontSize="14"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" />
+                <Border Width="1"
+                        Height="12"
+                        Background="{ThemeResource AppCardBorderBrush}"
+                        VerticalAlignment="Center" />
+                <TextBlock x:Name="TitleBarSubtitleText"
+                           Text="Receiver"
+                           FontSize="12"
+                           Foreground="{ThemeResource AppMutedForegroundBrush}"
+                           VerticalAlignment="Center"
+                           Margin="0,-1,0,0"
+                           TextTrimming="CharacterEllipsis" />
+            </StackPanel>
 
-                <TextBlock x:Name="ReceiverUrlLabelText" Text="Receiver URL" Opacity="0.75" />
-                <TextBox x:Name="ReceiverAddressBox" Text="http://127.0.0.1:39393" PlaceholderText="receiver address" TextChanged="OnReceiverAddressChanged" />
+            <StackPanel Grid.Column="3"
+                        Orientation="Horizontal"
+                        VerticalAlignment="Center"
+                        Spacing="6"
+                        Margin="0,-2,10,0">
+                <Border Background="{ThemeResource AppCardBackgroundBrush}"
+                        BorderBrush="{ThemeResource AppCardBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="11"
+                        Padding="10,0"
+                        Height="28">
+                    <TextBlock x:Name="TitleBarVersionChipText"
+                               Text="v1.0.0"
+                               FontSize="11"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center" />
+                </Border>
+                <Border Background="{ThemeResource AppNavActiveBrush}"
+                        BorderBrush="{ThemeResource AppCardBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="11"
+                        Padding="10,0"
+                        Height="28">
+                    <TextBlock x:Name="TitleBarChannelChipText"
+                               Text="Preview"
+                               FontSize="11"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center" />
+                </Border>
+            </StackPanel>
+        </Grid>
 
-                <Grid ColumnSpacing="8">
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="250" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0"
+                Margin="14,12,8,14"
+                Background="{ThemeResource AppPaneBackgroundBrush}"
+                BorderBrush="{ThemeResource AppCardBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="24"
+                Padding="18">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Spacing="8">
+                    <Button x:Name="SessionSectionButton" Style="{StaticResource NavChipStyle}" Click="OnShowSessionSection">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <FontIcon Glyph="&#xE768;" FontFamily="Segoe Fluent Icons" />
+                            <TextBlock x:Name="SessionSectionButtonText" Text="Session" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="DevicesSectionButton" Style="{StaticResource NavChipStyle}" Click="OnShowDevicesSection">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <FontIcon Glyph="&#xE7F8;" FontFamily="Segoe Fluent Icons" />
+                            <TextBlock x:Name="DevicesSectionButtonText" Text="Devices" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="VirtualCamSectionButton" Style="{StaticResource NavChipStyle}" Click="OnShowVirtualCamSection">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <FontIcon Glyph="&#xE714;" FontFamily="Segoe Fluent Icons" />
+                            <TextBlock x:Name="VirtualCamSectionButtonText" Text="Virtual Camera" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="LogsSectionButton" Style="{StaticResource NavChipStyle}" Click="OnShowLogsSection">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <FontIcon Glyph="&#xE8A5;" FontFamily="Segoe Fluent Icons" />
+                            <TextBlock x:Name="LogsSectionButtonText" Text="Logs" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <Border Grid.Row="1"
+                        Background="{ThemeResource AppCardBackgroundBrush}"
+                        BorderBrush="{ThemeResource AppCardBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="16"
+                        Padding="12">
+                    <StackPanel Spacing="4">
+                        <TextBlock x:Name="BuildVersionText" Text="ACB v1.0.0" FontWeight="SemiBold" />
+                        <TextBlock x:Name="BuildChannelText"
+                                   Text="Channel · Local Build"
+                                   Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Column="1" Margin="8,12,14,14">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0"
+                    Background="{ThemeResource AppPaneBackgroundBrush}"
+                    BorderBrush="{ThemeResource AppCardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="24"
+                    Padding="22"
+                    Margin="0,0,0,12">
+                <Grid ColumnSpacing="18">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Spacing="6">
+                        <TextBlock x:Name="CurrentSectionTitleText" Text="Session" FontSize="30" FontWeight="SemiBold" />
+                        <TextBlock x:Name="CurrentSectionSubtitleText"
+                                   Text="Manage stream quality, launch sessions, and inspect runtime state."
+                                   Foreground="{ThemeResource AppMutedForegroundBrush}"
+                                   TextWrapping="WrapWholeWords" />
+                    </StackPanel>
+
+                    <Grid Grid.Column="1" ColumnSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="150" />
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0"
+                                Background="{ThemeResource AppCardBackgroundBrush}"
+                                BorderBrush="{ThemeResource AppCardBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="16"
+                                Padding="12">
+                            <StackPanel Spacing="4">
+                                <TextBlock x:Name="SummaryReceiverLabelText" Text="Receiver" Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                <TextBlock x:Name="SummaryReceiverValueText" Text="127.0.0.1:39393" FontWeight="SemiBold" TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Column="1"
+                                Background="{ThemeResource AppCardBackgroundBrush}"
+                                BorderBrush="{ThemeResource AppCardBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="16"
+                                Padding="12">
+                            <StackPanel Spacing="4">
+                                <TextBlock x:Name="SummaryTransportLabelText" Text="Transport" Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                <TextBlock x:Name="SummaryTransportValueText" Text="USB (ADB)" FontWeight="SemiBold" TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Column="2"
+                                Background="{ThemeResource AppCardBackgroundBrush}"
+                                BorderBrush="{ThemeResource AppCardBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="16"
+                                Padding="12">
+                            <StackPanel Spacing="4">
+                                <TextBlock x:Name="SummarySessionLabelText" Text="Session" Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                <TextBlock x:Name="SummarySessionValueText" Text="Idle" FontWeight="SemiBold" TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Column="3"
+                                Background="{ThemeResource AppCardBackgroundBrush}"
+                                BorderBrush="{ThemeResource AppCardBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="16"
+                                Padding="12">
+                            <StackPanel Spacing="4">
+                                <TextBlock x:Name="SummaryVirtualCamLabelText" Text="Virtual Cam" Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                <TextBlock x:Name="SummaryVirtualCamValueText" Text="Stopped" FontWeight="SemiBold" TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <Border Grid.Row="1"
+                    Background="{ThemeResource AppPaneBackgroundBrush}"
+                    BorderBrush="{ThemeResource AppCardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="24"
+                    Padding="18"
+                    Margin="0,0,0,12">
+                <Grid ColumnSpacing="14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="190" />
                         <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="160" />
+                        <ColumnDefinition Width="160" />
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0" Spacing="6">
-                        <TextBlock x:Name="ConnectionModeLabelText" Text="Connection Mode" Opacity="0.75" />
+                        <TextBlock x:Name="LanguageLabelText" Text="Language" Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                        <ComboBox x:Name="LanguageBox" SelectionChanged="OnLanguageChanged" SelectedIndex="0">
+                            <ComboBoxItem Tag="auto" Content="Auto" />
+                            <ComboBoxItem Tag="zh-CN" Content="简体中文" />
+                            <ComboBoxItem Tag="en-US" Content="English" />
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Spacing="6">
+                        <TextBlock x:Name="ReceiverUrlLabelText" Text="Receiver URL" Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                        <TextBox x:Name="ReceiverAddressBox" Text="http://127.0.0.1:39393" PlaceholderText="receiver address" TextChanged="OnReceiverAddressChanged" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Spacing="6">
+                        <TextBlock x:Name="ConnectionModeLabelText" Text="Connection Mode" Foreground="{ThemeResource AppMutedForegroundBrush}" />
                         <ComboBox x:Name="ConnectionModeBox" SelectedIndex="0">
                             <ComboBoxItem x:Name="ConnectionModeManagedItem" Tag="managed" Content="managed" />
                             <ComboBoxItem x:Name="ConnectionModeAttachItem" Tag="attach" Content="attach" />
                         </ComboBox>
                     </StackPanel>
-                    <StackPanel Grid.Column="1" Spacing="6">
-                        <TextBlock x:Name="TransportLabelText" Text="Transport" Opacity="0.75" />
+                    <StackPanel Grid.Column="3" Spacing="6">
+                        <TextBlock x:Name="TransportLabelText" Text="Transport" Foreground="{ThemeResource AppMutedForegroundBrush}" />
                         <ComboBox x:Name="TransportBox" SelectedIndex="0" SelectionChanged="OnTransportChanged">
                             <ComboBoxItem x:Name="TransportUsbItem" Tag="usb-adb" Content="usb-adb" />
                             <ComboBoxItem x:Name="TransportUsbNativeItem" Tag="usb-native" Content="usb-native" />
@@ -46,170 +269,280 @@
                         </ComboBox>
                     </StackPanel>
                 </Grid>
+            </Border>
 
-                <Grid ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Spacing="6">
-                        <TextBlock x:Name="QualityLabelText" Text="Quality" Opacity="0.75" />
-                        <ComboBox x:Name="QualityPresetBox" SelectedIndex="0">
-                            <ComboBoxItem x:Name="QualityBalancedItem" Tag="balanced" Content="balanced" />
-                            <ComboBoxItem x:Name="QualityHighItem" Tag="high" Content="high" />
-                            <ComboBoxItem x:Name="QualityUltraItem" Tag="ultra" Content="ultra" />
-                        </ComboBox>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Spacing="6">
-                        <TextBlock x:Name="FitModeLabelText" Text="Fit Mode" Opacity="0.75" />
-                        <ComboBox x:Name="FitModeBox" SelectedIndex="0">
-                            <ComboBoxItem x:Name="FitLetterboxItem" Tag="letterbox" Content="letterbox" />
-                            <ComboBoxItem x:Name="FitCropItem" Tag="crop" Content="crop" />
-                            <ComboBoxItem x:Name="FitStretchItem" Tag="stretch" Content="stretch" />
-                        </ComboBox>
-                    </StackPanel>
+            <Grid Grid.Row="2">
+                <Grid x:Name="SessionSection" Visibility="Visible">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Spacing="12">
+                            <Border Style="{StaticResource SectionCardStyle}">
+                                <StackPanel Spacing="12">
+                                    <TextBlock Text="Session" FontSize="18" FontWeight="SemiBold" />
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Spacing="6">
+                                            <TextBlock x:Name="QualityLabelText" Text="Quality" Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                            <ComboBox x:Name="QualityPresetBox" SelectedIndex="0">
+                                                <ComboBoxItem x:Name="QualityBalancedItem" Tag="balanced" Content="balanced" />
+                                                <ComboBoxItem x:Name="QualityHighItem" Tag="high" Content="high" />
+                                                <ComboBoxItem x:Name="QualityUltraItem" Tag="ultra" Content="ultra" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="6">
+                                            <TextBlock x:Name="FitModeLabelText" Text="Fit Mode" Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                            <ComboBox x:Name="FitModeBox" SelectedIndex="0">
+                                                <ComboBoxItem x:Name="FitLetterboxItem" Tag="letterbox" Content="letterbox" />
+                                                <ComboBoxItem x:Name="FitCropItem" Tag="crop" Content="crop" />
+                                                <ComboBoxItem x:Name="FitStretchItem" Tag="stretch" Content="stretch" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="6">
+                                            <TextBlock x:Name="BitrateLabelText" Text="Bitrate" Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                            <TextBox x:Name="BitrateBox" Text="4000000" PlaceholderText="video bitrate bps" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Spacing="6">
+                                            <TextBlock x:Name="ResolutionLabelText" Text="Resolution" Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                            <ComboBox x:Name="ResolutionBox" SelectedIndex="1">
+                                                <ComboBoxItem Content="640x480" />
+                                                <ComboBoxItem Content="1280x720" />
+                                                <ComboBoxItem Content="1920x1080" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="6">
+                                            <TextBlock x:Name="FpsLabelText" Text="FPS" Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                            <ComboBox x:Name="FpsBox" SelectedIndex="1">
+                                                <ComboBoxItem Content="24" />
+                                                <ComboBoxItem Content="30" />
+                                                <ComboBoxItem Content="60" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="6" VerticalAlignment="Bottom">
+                                            <CheckBox x:Name="AudioEnabledBox" IsChecked="True" Content="Audio Enabled" />
+                                            <CheckBox x:Name="AutoStopReceiverBox" IsChecked="True" Content="Stop managed receiver on exit" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" x:Name="StartSessionButton" Content="Start v2 Session" Click="OnStartSession" />
+                                        <Button Grid.Column="1" x:Name="StopSessionButton" Content="Stop v2 Session" Click="OnStopSession" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource SectionCardStyle}">
+                                <StackPanel Spacing="10">
+                                    <TextBlock Text="Inspect" FontSize="18" FontWeight="SemiBold" />
+                                    <TextBox x:Name="SessionIdBox" PlaceholderText="session id" />
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" x:Name="FetchStatsButton" Content="Fetch v2 Stats" Click="OnFetchStats" />
+                                        <Button Grid.Column="1" x:Name="AutoRefreshButton" Content="Auto Refresh Stats (5s)" Click="OnToggleAutoRefreshStats" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
                 </Grid>
 
-                <Grid ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Spacing="6">
-                        <TextBlock x:Name="ResolutionLabelText" Text="Resolution" Opacity="0.75" />
-                        <ComboBox x:Name="ResolutionBox" SelectedIndex="1">
-                            <ComboBoxItem Content="640x480" />
-                            <ComboBoxItem Content="1280x720" />
-                            <ComboBoxItem Content="1920x1080" />
-                        </ComboBox>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Spacing="6">
-                        <TextBlock x:Name="FpsLabelText" Text="FPS" Opacity="0.75" />
-                        <ComboBox x:Name="FpsBox" SelectedIndex="1">
-                            <ComboBoxItem Content="24" />
-                            <ComboBoxItem Content="30" />
-                            <ComboBoxItem Content="60" />
-                        </ComboBox>
-                    </StackPanel>
-                    <StackPanel Grid.Column="2" Spacing="6">
-                        <TextBlock x:Name="BitrateLabelText" Text="Bitrate" Opacity="0.75" />
-                        <TextBox x:Name="BitrateBox" Text="4000000" PlaceholderText="video bitrate bps" />
-                    </StackPanel>
+                <Grid x:Name="DevicesSection" Visibility="Collapsed">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Spacing="12">
+                            <Border Style="{StaticResource SectionCardStyle}">
+                                <StackPanel Spacing="10">
+                                    <TextBlock Text="Receiver Tools" FontSize="18" FontWeight="SemiBold" />
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" x:Name="SetupAdbButton" Content="Setup ADB" Click="OnSetupAdb" />
+                                        <Button Grid.Column="1" x:Name="RefreshDevicesButton" Content="Refresh Devices" Click="OnRefreshDevices" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border x:Name="UsbNativePanel" Style="{StaticResource SectionCardStyle}" Visibility="Collapsed">
+                                <StackPanel Spacing="8">
+                                    <TextBlock x:Name="UsbNativePanelTitleText" Text="USB Native Panel" FontSize="18" FontWeight="SemiBold" />
+                                    <Grid ColumnSpacing="6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" x:Name="RefreshUsbNativeDevicesButton" Content="Refresh USB Devices" Click="OnRefreshUsbNativeDevices" />
+                                        <Button Grid.Column="1" x:Name="UsbNativeHandshakeButton" Content="Handshake" Click="OnUsbNativeHandshake" />
+                                        <Button Grid.Column="2" x:Name="RefreshUsbNativeLinkButton" Content="Refresh Link" Click="OnRefreshUsbNativeLink" />
+                                    </Grid>
+                                    <ListView x:Name="UsbNativeDevicesList" Height="132" SelectionChanged="OnUsbNativeDeviceSelectionChanged" />
+                                    <TextBox x:Name="UsbNativeSelectedDeviceBox" IsReadOnly="True" PlaceholderText="selected device path" />
+                                    <TextBox x:Name="UsbNativeStatusBox" IsReadOnly="True" TextWrapping="Wrap" PlaceholderText="usb-native status" />
+                                    <TextBox x:Name="UsbNativeLinkBox" IsReadOnly="True" TextWrapping="Wrap" PlaceholderText="usb-native link" />
+                                </StackPanel>
+                            </Border>
+
+                            <Border x:Name="UsbAoaPanel" Style="{StaticResource SectionCardStyle}" Visibility="Collapsed">
+                                <StackPanel Spacing="8">
+                                    <TextBlock x:Name="UsbAoaPanelTitleText" Text="USB AOA Panel" FontSize="18" FontWeight="SemiBold" />
+                                    <Grid ColumnSpacing="6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" x:Name="UsbAoaConnectButton" Content="AOA Connect" Click="OnUsbAoaConnect" />
+                                        <Button Grid.Column="1" x:Name="UsbAoaDisconnectButton" Content="AOA Disconnect" Click="OnUsbAoaDisconnect" />
+                                    </Grid>
+                                    <TextBox x:Name="UsbAoaStatusBox" IsReadOnly="True" TextWrapping="Wrap" PlaceholderText="usb-aoa status" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
                 </Grid>
 
-                <CheckBox x:Name="AudioEnabledBox" IsChecked="True" Content="Audio Enabled" />
-                <CheckBox x:Name="AutoStopReceiverBox" IsChecked="True" Content="Stop managed receiver on exit" />
-
-                <Grid ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Button Grid.Column="0" x:Name="SetupAdbButton" Content="Setup ADB" Click="OnSetupAdb" />
-                    <Button Grid.Column="1" x:Name="RefreshDevicesButton" Content="Refresh Devices" Click="OnRefreshDevices" />
+                <Grid x:Name="VirtualCamSection" Visibility="Collapsed">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Spacing="12">
+                            <Border x:Name="VirtualCamPanel" Style="{StaticResource SectionCardStyle}">
+                                <StackPanel Spacing="10">
+                                    <TextBlock x:Name="VirtualCamPanelTitleText" Text="Virtual Camera" FontSize="18" FontWeight="SemiBold" />
+                                    <CheckBox x:Name="VirtualCamAutoStartBox" IsChecked="True" Content="Start virtual camera with session" />
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="120" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="VirtualCamReceiverBox" Grid.Column="0" PlaceholderText="virtual camera receiver host:port" TextChanged="OnVirtualCamReceiverChanged" />
+                                        <TextBox x:Name="VirtualCamIntervalBox" Grid.Column="1" Text="16" PlaceholderText="interval ms" />
+                                    </Grid>
+                                    <Grid ColumnSpacing="6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" x:Name="VirtualCamStartButton" Content="Start Virtual Camera" Click="OnStartVirtualCam" />
+                                        <Button Grid.Column="1" x:Name="VirtualCamStopButton" Content="Stop Virtual Camera" Click="OnStopVirtualCam" />
+                                        <Button Grid.Column="2" x:Name="VirtualCamStatusButton" Content="Refresh Status" Click="OnRefreshVirtualCamStatus" />
+                                    </Grid>
+                                    <TextBox x:Name="VirtualCamStatusBox" IsReadOnly="True" TextWrapping="Wrap" PlaceholderText="virtual camera status" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
                 </Grid>
 
-                <Grid ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Button Grid.Column="0" x:Name="StartSessionButton" Content="Start v2 Session" Click="OnStartSession" />
-                    <Button Grid.Column="1" x:Name="StopSessionButton" Content="Stop v2 Session" Click="OnStopSession" />
+                <Grid x:Name="LogsSection" Visibility="Collapsed">
+                    <Grid RowSpacing="12">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <Border Grid.Row="0" Style="{StaticResource SectionCardStyle}">
+                            <StackPanel Spacing="10">
+                                <StackPanel Spacing="4">
+                                    <TextBlock x:Name="OutputTitleText" Text="Output" FontSize="18" FontWeight="SemiBold" />
+                                    <TextBlock x:Name="OutputSubtitleText"
+                                               Text="Runtime logs, receiver responses, and automation traces."
+                                               Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                </StackPanel>
+                                <Grid ColumnSpacing="10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="160" />
+                                        <ColumnDefinition Width="160" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="LogSearchBox"
+                                             Grid.Column="0"
+                                             PlaceholderText="Filter logs"
+                                             TextChanged="OnLogFilterChanged" />
+                                    <ComboBox x:Name="LogLevelFilterBox"
+                                              Grid.Column="1"
+                                              SelectionChanged="OnLogFilterChanged"
+                                              SelectedIndex="0">
+                                        <ComboBoxItem Tag="all" Content="All levels" />
+                                        <ComboBoxItem Tag="info" Content="Info" />
+                                        <ComboBoxItem Tag="error" Content="Error" />
+                                        <ComboBoxItem Tag="event" Content="Event" />
+                                    </ComboBox>
+                                    <ComboBox x:Name="LogSourceFilterBox"
+                                              Grid.Column="2"
+                                              SelectionChanged="OnLogFilterChanged"
+                                              SelectedIndex="0">
+                                        <ComboBoxItem Tag="all" Content="All sources" />
+                                        <ComboBoxItem Tag="app" Content="App" />
+                                        <ComboBoxItem Tag="session" Content="Session" />
+                                        <ComboBoxItem Tag="devices" Content="Devices" />
+                                        <ComboBoxItem Tag="virtualcam" Content="Virtual Camera" />
+                                    </ComboBox>
+                                    <CheckBox x:Name="LogAutoScrollBox"
+                                              Grid.Column="3"
+                                              VerticalAlignment="Center"
+                                              IsChecked="True"
+                                              Content="Auto-follow" />
+                                    <Button x:Name="ClearLogsButton"
+                                            Grid.Column="4"
+                                            Content="Clear"
+                                            Click="OnClearLogs" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Row="1"
+                                Style="{StaticResource SectionCardStyle}"
+                                Background="{ThemeResource AppOutputBackgroundBrush}">
+                            <ListView x:Name="LogsListView"
+                                      SelectionMode="None"
+                                      IsItemClickEnabled="False"
+                                      Background="Transparent"
+                                      BorderThickness="0">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{ThemeResource AppCardBackgroundBrush}"
+                                                BorderBrush="{ThemeResource AppCardBorderBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="14"
+                                                Padding="12"
+                                                Margin="0,0,0,8">
+                                            <StackPanel Spacing="6">
+                                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                                    <TextBlock Text="{Binding TimestampText}" Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                                    <TextBlock Text="{Binding LevelText}" FontWeight="SemiBold" />
+                                                    <TextBlock Text="{Binding SourceText}" Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding Message}"
+                                                           TextWrapping="WrapWholeWords" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                        </Border>
+                    </Grid>
                 </Grid>
-
-                <Border x:Name="UsbNativePanel" BorderThickness="1" BorderBrush="#33FFFFFF" CornerRadius="8" Padding="8" Visibility="Collapsed">
-                    <StackPanel Spacing="6">
-                        <TextBlock x:Name="UsbNativePanelTitleText" Text="USB Native Panel" FontWeight="SemiBold" />
-                        <Grid ColumnSpacing="6">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Button Grid.Column="0" x:Name="RefreshUsbNativeDevicesButton" Content="Refresh USB Devices" Click="OnRefreshUsbNativeDevices" />
-                            <Button Grid.Column="1" x:Name="UsbNativeHandshakeButton" Content="Handshake" Click="OnUsbNativeHandshake" />
-                            <Button Grid.Column="2" x:Name="RefreshUsbNativeLinkButton" Content="Refresh Link" Click="OnRefreshUsbNativeLink" />
-                        </Grid>
-                        <ListView x:Name="UsbNativeDevicesList" Height="110" SelectionChanged="OnUsbNativeDeviceSelectionChanged" />
-                        <TextBox x:Name="UsbNativeSelectedDeviceBox" IsReadOnly="True" PlaceholderText="selected device path" />
-                        <TextBox x:Name="UsbNativeStatusBox" IsReadOnly="True" TextWrapping="Wrap" PlaceholderText="usb-native status" />
-                        <TextBox x:Name="UsbNativeLinkBox" IsReadOnly="True" TextWrapping="Wrap" PlaceholderText="usb-native link" />
-                    </StackPanel>
-                </Border>
-
-                <Border x:Name="UsbAoaPanel" BorderThickness="1" BorderBrush="#33FFFFFF" CornerRadius="8" Padding="8" Visibility="Collapsed">
-                    <StackPanel Spacing="6">
-                        <TextBlock x:Name="UsbAoaPanelTitleText" Text="USB AOA Panel" FontWeight="SemiBold" />
-                        <Grid ColumnSpacing="6">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Button Grid.Column="0" x:Name="UsbAoaConnectButton" Content="AOA Connect" Click="OnUsbAoaConnect" />
-                            <Button Grid.Column="1" x:Name="UsbAoaDisconnectButton" Content="AOA Disconnect" Click="OnUsbAoaDisconnect" />
-                        </Grid>
-                        <TextBox x:Name="UsbAoaStatusBox" IsReadOnly="True" TextWrapping="Wrap" PlaceholderText="usb-aoa status" />
-                    </StackPanel>
-                </Border>
-
-                <Border x:Name="VirtualCamPanel" BorderThickness="1" BorderBrush="#33FFFFFF" CornerRadius="8" Padding="8">
-                    <StackPanel Spacing="6">
-                        <TextBlock x:Name="VirtualCamPanelTitleText" Text="Virtual Camera" FontWeight="SemiBold" />
-                        <CheckBox x:Name="VirtualCamAutoStartBox" IsChecked="True" Content="Start virtual camera with session" />
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="110" />
-                            </Grid.ColumnDefinitions>
-                            <TextBox x:Name="VirtualCamReceiverBox" Grid.Column="0" PlaceholderText="virtual camera receiver host:port" TextChanged="OnVirtualCamReceiverChanged" />
-                            <TextBox x:Name="VirtualCamIntervalBox" Grid.Column="1" Text="16" PlaceholderText="interval ms" />
-                        </Grid>
-                        <Grid ColumnSpacing="6">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Button Grid.Column="0" x:Name="VirtualCamStartButton" Content="Start Virtual Camera" Click="OnStartVirtualCam" />
-                            <Button Grid.Column="1" x:Name="VirtualCamStopButton" Content="Stop Virtual Camera" Click="OnStopVirtualCam" />
-                            <Button Grid.Column="2" x:Name="VirtualCamStatusButton" Content="Refresh Status" Click="OnRefreshVirtualCamStatus" />
-                        </Grid>
-                        <TextBox x:Name="VirtualCamStatusBox" IsReadOnly="True" TextWrapping="Wrap" PlaceholderText="virtual camera status" />
-                    </StackPanel>
-                </Border>
-
-                <TextBox x:Name="SessionIdBox" PlaceholderText="session id" />
-
-                <Grid ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Button Grid.Column="0" x:Name="FetchStatsButton" Content="Fetch v2 Stats" Click="OnFetchStats" />
-                    <Button Grid.Column="1" x:Name="AutoRefreshButton" Content="Auto Refresh Stats (5s)" Click="OnToggleAutoRefreshStats" />
-                </Grid>
-            </StackPanel>
-        </ScrollViewer>
-
-        <Grid Grid.Column="1" Padding="12,20,20,20">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
-            </Grid.RowDefinitions>
-            <TextBlock x:Name="OutputTitleText" Text="Output" FontSize="16" Opacity="0.8" />
-            <TextBox
-                Grid.Row="1"
-                x:Name="OutputBox"
-                Margin="0,10,0,0"
-                AcceptsReturn="True"
-                TextWrapping="Wrap"
-                IsReadOnly="True"
-                VerticalAlignment="Stretch"
-                HorizontalAlignment="Stretch"
-                ScrollViewer.VerticalScrollBarVisibility="Auto"
-                ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+            </Grid>
+        </Grid>
         </Grid>
     </Grid>
 </Window>

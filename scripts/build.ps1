@@ -10,6 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $buildDir = Join-Path $repoRoot "build"
+. (Join-Path $PSScriptRoot "cmake-common.ps1")
 
 function Reset-BuildDirIfSourceChanged {
   param([string]$Dir, [string]$ExpectedSource)
@@ -26,16 +27,10 @@ function Reset-BuildDirIfSourceChanged {
 
 Reset-BuildDirIfSourceChanged -Dir $buildDir -ExpectedSource $repoRoot
 
-$cmakeArgs = @("-S", $repoRoot, "-B", $buildDir, "-G", "Visual Studio 17 2022", "-A", "x64")
-if ($ObsIncludeDir) {
-  $cmakeArgs += "-DOBS_INCLUDE_DIR=$ObsIncludeDir"
-}
-if ($ObsGeneratedIncludeDir) {
-  $cmakeArgs += "-DOBS_GENERATED_INCLUDE_DIR=$ObsGeneratedIncludeDir"
-}
-if ($ObsLibDir) {
-  $cmakeArgs += "-DOBS_LIB_DIR=$ObsLibDir"
-}
-
-cmake @cmakeArgs
-cmake --build $buildDir --config $Config
+Invoke-CMakeConfigure `
+  -RepoRoot $repoRoot `
+  -BuildDir $buildDir `
+  -ObsIncludeDir $ObsIncludeDir `
+  -ObsGeneratedIncludeDir $ObsGeneratedIncludeDir `
+  -ObsLibDir $ObsLibDir
+Invoke-CMakeBuild -BuildDir $buildDir -Config $Config

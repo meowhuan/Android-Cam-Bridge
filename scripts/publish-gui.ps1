@@ -1,5 +1,6 @@
 #Requires -Version 7.0
 param(
+    [string]$Version = "",
     [string]$ObsIncludeDir = "",
     [string]$ObsGeneratedIncludeDir = "",
     [string]$ObsLibDir = ""
@@ -9,6 +10,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $buildDir = Join-Path $repoRoot "build"
+. (Join-Path $PSScriptRoot "cmake-common.ps1")
 Set-Location $repoRoot
 
 function Reset-BuildDirIfSourceChanged {
@@ -57,21 +59,13 @@ function Reset-BuildDirIfSourceChanged {
 
 Reset-BuildDirIfSourceChanged -Dir $buildDir -ExpectedSource $repoRoot
 
-$cmakeArgs = @("-S", $repoRoot, "-B", $buildDir, "-G", "Visual Studio 17 2022", "-A", "x64")
-if ($ObsIncludeDir) {
-  $cmakeArgs += "-DOBS_INCLUDE_DIR=$ObsIncludeDir"
-}
-if ($ObsGeneratedIncludeDir) {
-  $cmakeArgs += "-DOBS_GENERATED_INCLUDE_DIR=$ObsGeneratedIncludeDir"
-}
-if ($ObsLibDir) {
-  $cmakeArgs += "-DOBS_LIB_DIR=$ObsLibDir"
-}
-cmake @cmakeArgs
-cmake --build $buildDir --config Release --target acb-receiver
-if ($LASTEXITCODE -ne 0) {
-    throw "Receiver build failed."
-}
+Invoke-CMakeConfigure `
+  -RepoRoot $repoRoot `
+  -BuildDir $buildDir `
+  -ObsIncludeDir $ObsIncludeDir `
+  -ObsGeneratedIncludeDir $ObsGeneratedIncludeDir `
+  -ObsLibDir $ObsLibDir
+Invoke-CMakeBuild -BuildDir $buildDir -Config "Release" -Targets @("acb-receiver")
 
 pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "embed-receiver.ps1")
 if ($LASTEXITCODE -ne 0) {
@@ -80,11 +74,18 @@ if ($LASTEXITCODE -ne 0) {
 
 Set-Location (Join-Path $repoRoot "windows\gui\Acb.Gui")
 
-dotnet publish `
-  -c Release `
-  -r win-x64 `
-  -p:DefineConstants="ACB_EMBED_RECEIVER" `
-  -p:SelfContained=true
+$publishArgs = @(
+  "publish",
+  "-c", "Release",
+  "-r", "win-x64",
+  "-p:DefineConstants=ACB_EMBED_RECEIVER",
+  "-p:SelfContained=true"
+)
+if ($Version) {
+  $publishArgs += "-p:ACB_VERSION_NAME=$Version"
+}
+
+dotnet @publishArgs
 
 if ($LASTEXITCODE -ne 0) {
     throw "GUI publish failed."

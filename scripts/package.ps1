@@ -18,6 +18,7 @@ $buildDir = Join-Path $repoRoot "build"
 $outRoot = (Resolve-Path (New-Item -ItemType Directory -Path $OutDir -Force)).Path
 $stagingDir = Join-Path $outRoot "_staging"
 New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
+. (Join-Path $PSScriptRoot "cmake-common.ps1")
 
 function Reset-BuildDirIfSourceChanged {
   param([string]$Dir, [string]$ExpectedSource)
@@ -99,21 +100,16 @@ Write-Host "Packaging ACB version $Version"
 
 Reset-BuildDirIfSourceChanged -Dir $buildDir -ExpectedSource $repoRoot
 
-$cmakeArgs = @("-S", $repoRoot, "-B", $buildDir, "-G", "Visual Studio 17 2022", "-A", "x64")
-if ($ObsIncludeDir) {
-  $cmakeArgs += "-DOBS_INCLUDE_DIR=$ObsIncludeDir"
-}
-if ($ObsGeneratedIncludeDir) {
-  $cmakeArgs += "-DOBS_GENERATED_INCLUDE_DIR=$ObsGeneratedIncludeDir"
-}
-if ($ObsLibDir) {
-  $cmakeArgs += "-DOBS_LIB_DIR=$ObsLibDir"
-}
-cmake @cmakeArgs
-cmake --build $buildDir --config Release --target acb-receiver
-cmake --build $buildDir --config Release --target acb-obs-plugin
-cmake --build $buildDir --config Release --target acb-virtualcam-bridge
-cmake --build $buildDir --config Release --target acb-virtualcam
+Invoke-CMakeConfigure `
+  -RepoRoot $repoRoot `
+  -BuildDir $buildDir `
+  -ObsIncludeDir $ObsIncludeDir `
+  -ObsGeneratedIncludeDir $ObsGeneratedIncludeDir `
+  -ObsLibDir $ObsLibDir
+Invoke-CMakeBuild -BuildDir $buildDir -Config "Release" -Targets @("acb-receiver")
+Invoke-CMakeBuild -BuildDir $buildDir -Config "Release" -Targets @("acb-obs-plugin")
+Invoke-CMakeBuild -BuildDir $buildDir -Config "Release" -Targets @("acb-virtualcam-bridge")
+Invoke-CMakeBuild -BuildDir $buildDir -Config "Release" -Targets @("acb-virtualcam")
 
 $obsBuildModeFile = Join-Path $repoRoot "build\windows\obs-plugin\acb_obs_build_mode.txt"
 $obsBuildMode = ""
@@ -135,7 +131,7 @@ if ($hasRealObsPlugin) {
   Copy-Item $obsDllFile.FullName $stagedObsDll -Force
 }
 
-pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "publish-gui.ps1") -ObsIncludeDir $ObsIncludeDir -ObsGeneratedIncludeDir $ObsGeneratedIncludeDir -ObsLibDir $ObsLibDir
+pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "publish-gui.ps1") -Version $Version -ObsIncludeDir $ObsIncludeDir -ObsGeneratedIncludeDir $ObsGeneratedIncludeDir -ObsLibDir $ObsLibDir
 if ($LASTEXITCODE -ne 0) {
   throw "GUI publish failed in package step."
 }
@@ -191,7 +187,11 @@ if ($hasRealObsPlugin) {
 }
 
 $vcRedist = Join-Path $prereqOut "vc_redist.x64.exe"
-Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $vcRedist
+if (Test-Path $vcRedist) {
+  Write-Host "Reusing existing VC++ redistributable: $vcRedist"
+} else {
+  Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $vcRedist
+}
 
 Copy-Item (Join-Path $PSScriptRoot "install-acb.ps1") (Join-Path $outRoot "install-acb.ps1") -Force
 Copy-Item (Join-Path $PSScriptRoot "uninstall-acb.ps1") (Join-Path $outRoot "uninstall-acb.ps1") -Force

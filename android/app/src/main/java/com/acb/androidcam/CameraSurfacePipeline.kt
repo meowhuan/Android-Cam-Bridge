@@ -179,24 +179,29 @@ class CameraSurfacePipeline(
             ) ?: scoped.first()
         }
 
-        fun prepareCaptureProfile(context: Context, spec: CaptureSpec): CaptureProfile {
+        fun prepareCaptureProfile(
+            context: Context,
+            spec: CaptureSpec,
+            allowHighSpeed: Boolean = true,
+        ): CaptureProfile {
             val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-            val characteristics = manager.getCameraCharacteristics(spec.profile.cameraId)
+            val selectedProfile = chooseRuntimeProfile(context, spec, allowHighSpeed)
+            val characteristics = manager.getCameraCharacteristics(selectedProfile.cameraId)
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            val captureSize = Size(spec.profile.width, spec.profile.height)
-            val sessionMode = chooseSessionMode(spec.profile, spec.mode, map, captureSize)
+            val captureSize = Size(selectedProfile.width, selectedProfile.height)
+            val sessionMode = chooseSessionMode(selectedProfile, spec.mode, map, captureSize, allowHighSpeed)
             val actualRange = if (sessionMode == CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED && map != null) {
-                chooseHighSpeedRange(map, captureSize, spec.profile.targetFps)
+                chooseHighSpeedRange(map, captureSize, selectedProfile.targetFps)
             } else {
-                chooseCaptureRange(characteristics, spec.profile.targetFps, spec.mode)
+                chooseCaptureRange(characteristics, selectedProfile.targetFps, spec.mode)
             }
             val tuning = buildCaptureTuning(characteristics, spec.mode, actualRange, sessionMode)
             return CaptureProfile(
-                selectedProfile = spec.profile,
+                selectedProfile = selectedProfile,
                 captureSize = captureSize,
                 actualFpsRange = actualRange,
                 mode = spec.mode,
-                torchEnabled = spec.torchEnabled && spec.profile.supportsTorch && sessionMode != CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED,
+                torchEnabled = spec.torchEnabled && selectedProfile.supportsTorch && sessionMode != CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED,
                 sessionMode = sessionMode,
                 tuning = tuning,
             )
@@ -250,8 +255,9 @@ class CameraSurfacePipeline(
             mode: CaptureModePreset,
             map: StreamConfigurationMap?,
             size: Size,
+            allowHighSpeed: Boolean,
         ): CaptureDeliveryMode {
-            if (mode == CaptureModePreset.LOW_LIGHT || map == null) {
+            if (!allowHighSpeed || mode == CaptureModePreset.LOW_LIGHT || map == null) {
                 return CaptureDeliveryMode.STANDARD
             }
             return if (profile.deliveryMode == CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED &&
@@ -363,6 +369,36 @@ class CameraSurfacePipeline(
                     postRawSensitivityBoost = postRawBoost,
                 )
             }
+        }
+
+        private fun chooseRuntimeProfile(
+            context: Context,
+            spec: CaptureSpec,
+            allowHighSpeed: Boolean,
+        ): SupportedCaptureProfile {
+            val selected = spec.profile
+            val needsStandardProfile = !allowHighSpeed || spec.mode == CaptureModePreset.LOW_LIGHT || spec.torchEnabled
+            if (!needsStandardProfile || selected.deliveryMode == CaptureDeliveryMode.STANDARD) {
+                return selected
+            }
+
+            val profiles = enumerateSupportedProfiles(context)
+            val maxAllowedFps = if (spec.mode == CaptureModePreset.LOW_LIGHT || spec.torchEnabled) {
+                30
+            } else {
+                selected.targetFps
+            }
+
+            return profiles
+                .filter {
+                    it.cameraId == selected.cameraId &&
+                        it.width == selected.width &&
+                        it.height == selected.height &&
+                        it.deliveryMode == CaptureDeliveryMode.STANDARD &&
+                        it.targetFps <= maxAllowedFps
+                }
+                .maxWithOrNull(compareBy<SupportedCaptureProfile> { it.targetFps }.thenBy { it.recommendedBitrate })
+                ?: selected
         }
 
         private fun findBestBackCameraId(manager: CameraManager): String? {
@@ -623,54 +659,73 @@ class CameraSurfacePipeline(
         try {
             val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val characteristics = manager.getCameraCharacteristics(config.profile.cameraId)
-            val requestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                addTarget(config.encoderSurface)
-                previewSurface?.let { addTarget(it) }
-                set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
-                set(CaptureRequest.CONTROL_MODE, config.profile.tuning.controlMode)
-                set(CaptureRequest.CONTROL_AE_MODE, config.profile.tuning.aeMode)
-                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-                set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
-                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, config.profile.tuning.aeTargetFpsRange)
-                set(CaptureRequest.NOISE_REDUCTION_MODE, config.profile.tuning.noiseReductionMode)
-                set(CaptureRequest.EDGE_MODE, config.profile.tuning.edgeMode)
-                config.profile.tuning.sceneMode?.let { set(CaptureRequest.CONTROL_SCENE_MODE, it) }
-                config.profile.tuning.colorCorrectionAberrationMode?.let {
-                    set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, it)
-                }
-                config.profile.tuning.hotPixelMode?.let { set(CaptureRequest.HOT_PIXEL_MODE, it) }
-                config.profile.tuning.shadingMode?.let { set(CaptureRequest.SHADING_MODE, it) }
-                config.profile.tuning.tonemapMode?.let { set(CaptureRequest.TONEMAP_MODE, it) }
-                config.profile.tuning.postRawSensitivityBoost?.let {
-                    set(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, it)
-                }
-                set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO)
-                if (config.profile.torchEnabled && characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true) {
-                    set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
-                } else {
-                    set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
-                }
-                if (characteristics.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
-                        ?.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON) == true) {
-                    set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
-                }
-            }
-            val request = requestBuilder.build()
-            if (config.profile.sessionMode == CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED) {
-                val highSpeedSession = session as? CameraConstrainedHighSpeedCaptureSession
-                    ?: error("high-speed session unavailable")
-                val burst = highSpeedSession.createHighSpeedRequestList(request)
-                highSpeedSession.setRepeatingBurst(burst, null, cameraHandler)
-            } else {
-                session.setRepeatingRequest(request, null, cameraHandler)
-            }
+            submitRepeatingRequest(session, device, config, characteristics, forceTorchOff = false)
             AppLog.i(
                 TAG,
                 "capture repeating started actual=${config.profile.actualLabel} torch=${config.profile.torchEnabled} session=${config.profile.sessionMode}",
             )
         } catch (t: Throwable) {
+            if (config.profile.torchEnabled) {
+                try {
+                    val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                    val characteristics = manager.getCameraCharacteristics(config.profile.cameraId)
+                    submitRepeatingRequest(session, device, config, characteristics, forceTorchOff = true)
+                    AppLog.w(TAG, "torch request failed; streaming continues with torch disabled")
+                    return
+                } catch (_: Throwable) {
+                }
+            }
             AppLog.e(TAG, "startRepeating failed: ${t.message}", t)
             onError?.invoke("capture repeat failed: ${t.message}")
+        }
+    }
+
+    private fun submitRepeatingRequest(
+        session: CameraCaptureSession,
+        device: CameraDevice,
+        config: Config,
+        characteristics: CameraCharacteristics,
+        forceTorchOff: Boolean,
+    ) {
+        val requestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+            addTarget(config.encoderSurface)
+            previewSurface?.let { addTarget(it) }
+            set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
+            set(CaptureRequest.CONTROL_MODE, config.profile.tuning.controlMode)
+            set(CaptureRequest.CONTROL_AE_MODE, config.profile.tuning.aeMode)
+            set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+            set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, config.profile.tuning.aeTargetFpsRange)
+            set(CaptureRequest.NOISE_REDUCTION_MODE, config.profile.tuning.noiseReductionMode)
+            set(CaptureRequest.EDGE_MODE, config.profile.tuning.edgeMode)
+            config.profile.tuning.sceneMode?.let { set(CaptureRequest.CONTROL_SCENE_MODE, it) }
+            config.profile.tuning.colorCorrectionAberrationMode?.let {
+                set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, it)
+            }
+            config.profile.tuning.hotPixelMode?.let { set(CaptureRequest.HOT_PIXEL_MODE, it) }
+            config.profile.tuning.shadingMode?.let { set(CaptureRequest.SHADING_MODE, it) }
+            config.profile.tuning.tonemapMode?.let { set(CaptureRequest.TONEMAP_MODE, it) }
+            config.profile.tuning.postRawSensitivityBoost?.let {
+                set(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, it)
+            }
+            set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO)
+            val enableTorch = !forceTorchOff &&
+                config.profile.torchEnabled &&
+                characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            set(CaptureRequest.FLASH_MODE, if (enableTorch) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF)
+            if (characteristics.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
+                    ?.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON) == true) {
+                set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+            }
+        }
+        val request = requestBuilder.build()
+        if (config.profile.sessionMode == CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED) {
+            val highSpeedSession = session as? CameraConstrainedHighSpeedCaptureSession
+                ?: error("high-speed session unavailable")
+            val burst = highSpeedSession.createHighSpeedRequestList(request)
+            highSpeedSession.setRepeatingBurst(burst, null, cameraHandler)
+        } else {
+            session.setRepeatingRequest(request, null, cameraHandler)
         }
     }
 
@@ -684,66 +739,54 @@ class CameraSurfacePipeline(
     private fun updatePreviewTransform() {
         val config = activeConfig ?: return
         val textureView = config.previewView ?: return
-        val cameraId = activeCameraId ?: return
+        if (activeCameraId == null) return
         if (textureView.width == 0 || textureView.height == 0) return
 
         textureView.post {
             try {
-                val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-                val characteristics = manager.getCameraCharacteristics(cameraId)
-                val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-                val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
-                    ?: CameraCharacteristics.LENS_FACING_BACK
                 val displayRotation = textureView.display?.rotation ?: Surface.ROTATION_0
-                val relativeRotation = computeRelativeRotation(sensorOrientation, displayRotation, lensFacing)
-                val bufferWidth = if (relativeRotation % 180 == 0) {
-                    config.profile.captureSize.width.toFloat()
-                } else {
-                    config.profile.captureSize.height.toFloat()
-                }
-                val bufferHeight = if (relativeRotation % 180 == 0) {
-                    config.profile.captureSize.height.toFloat()
-                } else {
-                    config.profile.captureSize.width.toFloat()
+                val appliedRotation = when (displayRotation) {
+                    Surface.ROTATION_90 -> -90f
+                    Surface.ROTATION_180 -> 180f
+                    Surface.ROTATION_270 -> 90f
+                    else -> 0f
                 }
 
                 val matrix = Matrix()
                 val viewRect = RectF(0f, 0f, textureView.width.toFloat(), textureView.height.toFloat())
-                val centerX = viewRect.centerX()
-                val centerY = viewRect.centerY()
+                val rotated = displayRotation == Surface.ROTATION_90 || displayRotation == Surface.ROTATION_270
+                val bufferWidth = if (rotated) config.profile.captureSize.height.toFloat() else config.profile.captureSize.width.toFloat()
+                val bufferHeight = if (rotated) config.profile.captureSize.width.toFloat() else config.profile.captureSize.height.toFloat()
                 val bufferRect = RectF(
-                    centerX - bufferWidth / 2f,
-                    centerY - bufferHeight / 2f,
-                    centerX + bufferWidth / 2f,
-                    centerY + bufferHeight / 2f,
-                )
+                    0f,
+                    0f,
+                    bufferWidth,
+                    bufferHeight,
+                ).apply {
+                    offset(
+                        viewRect.centerX() - centerX(),
+                        viewRect.centerY() - centerY(),
+                    )
+                }
+
                 matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
                 val scale = maxOf(
                     viewRect.width() / bufferWidth,
                     viewRect.height() / bufferHeight,
                 )
-                matrix.postScale(scale, scale, centerX, centerY)
-                matrix.postRotate(-relativeRotation.toFloat(), centerX, centerY)
+                matrix.postScale(scale, scale, viewRect.centerX(), viewRect.centerY())
+                if (appliedRotation != 0f) {
+                    matrix.postRotate(appliedRotation, viewRect.centerX(), viewRect.centerY())
+                }
                 textureView.setTransform(matrix)
                 AppLog.d(
                     TAG,
-                    "stream preview transform rotation=$relativeRotation view=${textureView.width}x${textureView.height} buffer=${config.profile.captureSize.width}x${config.profile.captureSize.height} session=${config.profile.sessionMode}",
+                    "stream preview transform displayRotation=$displayRotation applied=$appliedRotation view=${textureView.width}x${textureView.height} buffer=${config.profile.captureSize.width}x${config.profile.captureSize.height} mapped=${bufferWidth.toInt()}x${bufferHeight.toInt()} scale=$scale session=${config.profile.sessionMode}",
                 )
             } catch (t: Throwable) {
                 AppLog.w(TAG, "updatePreviewTransform failed: ${t.message}", t)
             }
         }
-    }
-
-    private fun computeRelativeRotation(sensorOrientation: Int, displayRotation: Int, lensFacing: Int): Int {
-        val displayDegrees = when (displayRotation) {
-            Surface.ROTATION_90 -> 90
-            Surface.ROTATION_180 -> 180
-            Surface.ROTATION_270 -> 270
-            else -> 0
-        }
-        val sign = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) -1 else 1
-        return (sensorOrientation - displayDegrees * sign + 360) % 360
     }
 
     private fun closeSessionLocked() {

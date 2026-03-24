@@ -45,6 +45,9 @@ class CameraController(
     private var currentReceiver = "127.0.0.1:39393"
     private var targetWidth = 1280
     private var targetHeight = 720
+    @Volatile private var currentCaptureSpec: CaptureSpec? = null
+    @Volatile private var currentCaptureProfile: CameraSurfacePipeline.CaptureProfile? = null
+    @Volatile private var currentStreamPreviewView: TextureView? = null
     private val v2Client = V2MediaClient(
         onDebugEvent = { onDebugEvent?.invoke(it) },
         onStreamStateChanged = { state, detail -> emitStreamState(state, detail) },
@@ -70,8 +73,15 @@ class CameraController(
             transport == TransportMode.USB_AOA -> ""
             else -> "127.0.0.1:39393"
         }
+        currentCaptureSpec = captureSpec
+        currentStreamPreviewView = streamPreviewView
 
-        val captureProfile = CameraSurfacePipeline.prepareCaptureProfile(context, captureSpec)
+        val captureProfile = CameraSurfacePipeline.prepareCaptureProfile(
+            context = context,
+            spec = captureSpec,
+            allowHighSpeed = streamPreviewView == null,
+        )
+        currentCaptureProfile = captureProfile
         targetWidth = captureProfile.captureSize.width
         targetHeight = captureProfile.captureSize.height
         val effectiveBitrate = chooseEffectiveBitrate(
@@ -126,6 +136,9 @@ class CameraController(
         running.set(false)
         micRunning.set(false)
         cameraPipeline.stop()
+        currentCaptureSpec = null
+        currentCaptureProfile = null
+        currentStreamPreviewView = null
 
         videoEncoder?.stop()
         videoEncoder = null
@@ -150,6 +163,51 @@ class CameraController(
 
     fun attachUsbAccessoryTransport(transport: UsbAccessoryTransport?) {
         v2Client.setUsbAccessoryTransport(transport)
+    }
+
+    fun updateTorchEnabled(enabled: Boolean): CameraSurfacePipeline.CaptureProfile? {
+        val previousSpec = currentCaptureSpec ?: return null
+        val previewView = currentStreamPreviewView
+        val updatedSpec = previousSpec.copy(torchEnabled = enabled)
+        currentCaptureSpec = updatedSpec
+
+        if (!running.get()) {
+            return null
+        }
+
+        val encoder = videoEncoder ?: return null
+        val updatedProfile = CameraSurfacePipeline.prepareCaptureProfile(
+            context = context,
+            spec = updatedSpec,
+            allowHighSpeed = previewView == null,
+        )
+        val existingProfile = currentCaptureProfile
+        if (existingProfile != null &&
+            (existingProfile.captureSize != updatedProfile.captureSize ||
+                existingProfile.actualFpsRange != updatedProfile.actualFpsRange ||
+                existingProfile.sessionMode != updatedProfile.sessionMode)
+        ) {
+            val line =
+                "torch update skipped: capture reconfiguration required current=${existingProfile.actualLabel} target=${updatedProfile.actualLabel}"
+            AppLog.w("ACB", line)
+            onDebugEvent?.invoke(line)
+            return existingProfile
+        }
+
+        return try {
+            cameraPipeline.start(updatedProfile, encoder.inputSurface, previewView)
+            currentCaptureProfile = updatedProfile
+            val line = "torch updated running=${updatedProfile.torchEnabled} actual=${updatedProfile.actualLabel}"
+            AppLog.i("ACB", line)
+            onDebugEvent?.invoke(line)
+            updatedProfile
+        } catch (t: Throwable) {
+            val line = "torch update failed: ${t.message}"
+            AppLog.e("ACB", line, t)
+            onDebugEvent?.invoke(line)
+            emitStreamState(StreamUiState.ERROR, line)
+            existingProfile
+        }
     }
 
     private data class AudioFxBundle(

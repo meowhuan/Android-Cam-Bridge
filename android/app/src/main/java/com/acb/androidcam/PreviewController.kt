@@ -108,7 +108,11 @@ class PreviewController(
             return
         }
 
-        val actualProfile = CameraSurfacePipeline.prepareCaptureProfile(context, spec)
+        val actualProfile = CameraSurfacePipeline.prepareCaptureProfile(
+            context = context,
+            spec = spec,
+            allowHighSpeed = false,
+        )
         val profile = actualProfile.selectedProfile
         val selector = buildCameraSelector(profile.cameraId)
         val rotation = previewView.display?.rotation ?: Surface.ROTATION_0

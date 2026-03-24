@@ -258,6 +258,9 @@ std::string HandleCommand(BridgeState* state, const std::string& cmdLine) {
   std::istringstream iss(cmdLine);
   std::string cmd;
   iss >> cmd;
+  if (cmd.rfind("\xEF\xBB\xBF", 0) == 0) {
+    cmd.erase(0, 3);
+  }
   for (char& c : cmd) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
   if (cmd == "START") {
     std::lock_guard<std::mutex> lock(state->mu);

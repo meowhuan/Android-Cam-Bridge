@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using System;
+using System.Collections.ObjectModel;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -13,6 +14,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Reflection;
 using Windows.Graphics;
 using WinRT.Interop;
 
@@ -20,6 +22,14 @@ namespace Acb.Gui;
 
 public sealed partial class MainWindow : Window
 {
+    private enum LeftSection
+    {
+        Session,
+        Devices,
+        VirtualCam,
+        Logs
+    }
+
     private readonly ReceiverApiClient _client = new();
     private readonly DispatcherTimer _statsTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private readonly DispatcherTimer _usbNativeTimer = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -30,17 +40,25 @@ public sealed partial class MainWindow : Window
     private int _usbNativeTickCount;
     private bool _usbAoaRefreshInProgress;
     private bool _virtualCamRefreshInProgress;
+    private bool _sessionRunning;
+    private bool _virtualCamRunning;
     private Process? _receiverProcess;
     private bool _receiverStartedByGui;
     private Process? _virtualCamBridgeProcess;
     private bool _virtualCamStartedByGui;
     private bool _virtualCamReceiverOverrideActive;
     private bool _uiInitialized;
+    private bool _windowChromeInitialized;
+    private LeftSection _activeSection = LeftSection.Session;
     private const string VirtualCamPipeName = "acb-virtualcam-control";
+    private readonly List<LogEntryItem> _allLogEntries = new();
+    private readonly ObservableCollection<LogEntryItem> _visibleLogEntries = new();
 
     public MainWindow()
     {
         InitializeComponent();
+        TryApplyWindowBackdrop();
+        Activated += OnWindowActivated;
         TryResizeWindow(1320, 840);
         _statsTimer.Tick += OnStatsTimerTick;
         _usbNativeTimer.Tick += OnUsbNativeTimerTick;
@@ -52,13 +70,89 @@ public sealed partial class MainWindow : Window
         Closed += OnWindowClosed;
         AppLogger.LineWritten += OnAppLogLineWritten;
         _uiInitialized = true;
+        LogsListView.ItemsSource = _visibleLogEntries;
         VirtualCamReceiverBox.Text = NormalizeReceiverForVirtualCam(ReceiverAddressBox.Text);
+        ShowSection(LeftSection.Session);
         ApplyLanguage();
+        UpdateBuildIdentity();
         if (!string.IsNullOrWhiteSpace(AppLogger.LogFilePath))
         {
             AppendOutput(AppLogger.LogFilePath!, "gui log");
         }
         AppLogger.Info("main window initialized");
+    }
+
+    private void OnWindowActivated(object sender, WindowActivatedEventArgs args)
+    {
+        if (_windowChromeInitialized)
+        {
+            return;
+        }
+
+        _windowChromeInitialized = true;
+        TryConfigureWindowChrome();
+    }
+
+    private void TryApplyWindowBackdrop()
+    {
+        try
+        {
+            SystemBackdrop = new MicaBackdrop();
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("window backdrop apply failed", ex);
+        }
+    }
+
+    private void TryConfigureWindowChrome()
+    {
+        try
+        {
+            ExtendsContentIntoTitleBar = true;
+            if (WindowTitleBar != null)
+            {
+                SetTitleBar(WindowTitleBar);
+            }
+
+            var hwnd = WindowNative.GetWindowHandle(this);
+            var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
+            var appWindow = AppWindow.GetFromWindowId(windowId);
+            if (appWindow != null && AppWindowTitleBar.IsCustomizationSupported())
+            {
+                var titleBar = appWindow.TitleBar;
+                titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
+                titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+                titleBar.ButtonHoverBackgroundColor = Microsoft.UI.ColorHelper.FromArgb(36, 0, 103, 192);
+                titleBar.ButtonPressedBackgroundColor = Microsoft.UI.ColorHelper.FromArgb(64, 0, 103, 192);
+                titleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
+                UpdateTitleBarInsets(titleBar);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("window chrome configure failed", ex);
+        }
+    }
+
+    private void UpdateTitleBarInsets(AppWindowTitleBar titleBar)
+    {
+        try
+        {
+            var scale = Content.XamlRoot?.RasterizationScale ?? 1.0;
+            if (TitleBarLeftInsetColumn != null)
+            {
+                TitleBarLeftInsetColumn.Width = new GridLength(titleBar.LeftInset / scale);
+            }
+            if (TitleBarRightInsetColumn != null)
+            {
+                TitleBarRightInsetColumn.Width = new GridLength(titleBar.RightInset / scale);
+            }
+        }
+        catch
+        {
+            // Ignore inset refresh failures on older runtimes.
+        }
     }
 
     private void OnReceiverAddressChanged(object sender, TextChangedEventArgs e)
@@ -73,6 +167,7 @@ public sealed partial class MainWindow : Window
         {
             VirtualCamReceiverBox.Text = normalized;
         }
+        UpdateChromeSummary();
     }
 
     private void OnVirtualCamReceiverChanged(object sender, TextChangedEventArgs e)
@@ -202,6 +297,7 @@ public sealed partial class MainWindow : Window
             {
                 SessionIdBox.Text = sessionId;
             }
+            _sessionRunning = !string.IsNullOrWhiteSpace(sessionId);
             if (transport == "usb-native")
             {
                 await RefreshUsbNativeStatusAndLinkAsync();
@@ -212,7 +308,22 @@ public sealed partial class MainWindow : Window
             }
             if (VirtualCamAutoStartBox.IsChecked ?? true)
             {
-                await StartVirtualCamAsync();
+                try
+                {
+                    await StartVirtualCamAsync();
+                }
+                catch (FileNotFoundException ex)
+                {
+                    VirtualCamStatusBox.Text = ex.Message;
+                    AppendOutput(ex.Message, "virtualcam");
+                    AppLogger.Info("virtual camera bridge missing for auto start");
+                }
+                catch (Exception ex)
+                {
+                    VirtualCamStatusBox.Text = ex.Message;
+                    AppendOutput($"{ex.GetType().Name}: {ex.Message}", "virtualcam");
+                    AppLogger.Error("virtual camera auto start failed", ex);
+                }
             }
         }
         catch (Exception ex)
@@ -236,6 +347,8 @@ public sealed partial class MainWindow : Window
 
             AppendOutput(await _client.StopV2SessionAsync(id), "session stop");
             AppLogger.Info($"session stop requested sessionId={id}");
+            _sessionRunning = false;
+            UpdateChromeSummary();
         }
         catch (Exception ex)
         {
@@ -386,6 +499,12 @@ public sealed partial class MainWindow : Window
         {
             await StartVirtualCamAsync();
         }
+        catch (FileNotFoundException ex)
+        {
+            VirtualCamStatusBox.Text = ex.Message;
+            AppendOutput(ex.Message, "virtualcam");
+            AppLogger.Info("virtual camera bridge executable not found");
+        }
         catch (Exception ex)
         {
             AppLogger.Error("start virtual camera failed", ex);
@@ -398,6 +517,12 @@ public sealed partial class MainWindow : Window
         try
         {
             await StopVirtualCamAsync(false);
+        }
+        catch (OperationCanceledException)
+        {
+            var message = IsZh() ? "虚拟摄像头桥接未响应，已视为停止" : "virtual camera bridge not responding; treated as stopped";
+            VirtualCamStatusBox.Text = message;
+            AppendOutput(message, "virtualcam");
         }
         catch (Exception ex)
         {
@@ -413,18 +538,46 @@ public sealed partial class MainWindow : Window
 
     private async void OnTransportChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (!_uiInitialized || TransportBox == null || UsbNativePanel == null || UsbAoaPanel == null)
+        {
+            return;
+        }
+
         UpdateUsbNativePanelVisibility();
         UpdateUsbAoaPanelVisibility();
         var transport = GetComboValue(TransportBox, "usb-adb");
         if (transport == "usb-native")
         {
+            ShowSection(LeftSection.Devices);
             await RefreshUsbNativeDevicesAsync(false);
             await RefreshUsbNativeStatusAndLinkAsync(false);
         }
         else if (transport == "usb-aoa")
         {
+            ShowSection(LeftSection.Devices);
             await RefreshUsbAoaStatusAsync(false);
         }
+        UpdateChromeSummary();
+    }
+
+    private void OnShowSessionSection(object sender, RoutedEventArgs e)
+    {
+        ShowSection(LeftSection.Session);
+    }
+
+    private void OnShowDevicesSection(object sender, RoutedEventArgs e)
+    {
+        ShowSection(LeftSection.Devices);
+    }
+
+    private void OnShowVirtualCamSection(object sender, RoutedEventArgs e)
+    {
+        ShowSection(LeftSection.VirtualCam);
+    }
+
+    private void OnShowLogsSection(object sender, RoutedEventArgs e)
+    {
+        ShowSection(LeftSection.Logs);
     }
 
     private async void OnVirtualCamTimerTick(object? sender, object e)
@@ -511,11 +664,23 @@ public sealed partial class MainWindow : Window
         VirtualCamStatusBox.Text = response;
         AppendOutput($"{response}{Environment.NewLine}receiver={receiver} interval={intervalMs}ms", "virtualcam");
         AppLogger.Info($"virtual camera started receiver={receiver} intervalMs={intervalMs}");
+        _virtualCamRunning = true;
+        UpdateChromeSummary();
         await RefreshVirtualCamStatusAsync(false);
     }
 
     private async Task StopVirtualCamAsync(bool exitBridge)
     {
+        if (!IsVirtualCamBridgeRunning())
+        {
+            var notRunning = IsZh() ? "虚拟摄像头桥接未运行" : "virtual camera bridge is not running";
+            VirtualCamStatusBox.Text = notRunning;
+            AppendOutput(notRunning, "virtualcam");
+            _virtualCamRunning = false;
+            UpdateChromeSummary();
+            return;
+        }
+
         string response;
         try
         {
@@ -525,33 +690,31 @@ public sealed partial class MainWindow : Window
         {
             if (!exitBridge)
             {
-                throw;
+                if (ex is OperationCanceledException || ex is TimeoutException || ex is IOException)
+                {
+                    response = IsZh() ? "虚拟摄像头桥接未响应，已视为停止" : "virtual camera bridge not responding; treated as stopped";
+                }
+                else
+                {
+                    throw;
+                }
             }
-
-            AppLogger.Error("virtual camera bridge stop on exit failed", ex);
-            response = "virtual camera bridge already stopped";
+            else
+            {
+                AppLogger.Error("virtual camera bridge stop on exit failed", ex);
+                response = "virtual camera bridge already stopped";
+            }
         }
 
         VirtualCamStatusBox.Text = response;
         AppendOutput(response, "virtualcam");
         AppLogger.Info(exitBridge ? "virtual camera bridge exited" : "virtual camera stopped");
+        _virtualCamRunning = false;
+        UpdateChromeSummary();
 
         if (exitBridge && _virtualCamBridgeProcess != null)
         {
-            try
-            {
-                if (!_virtualCamBridgeProcess.HasExited)
-                {
-                    _virtualCamBridgeProcess.WaitForExit(1500);
-                }
-            }
-            catch
-            {
-                // Ignore shutdown race.
-            }
-
-            _virtualCamBridgeProcess.Dispose();
-            _virtualCamBridgeProcess = null;
+            DisposeManagedProcess(ref _virtualCamBridgeProcess, "virtual camera bridge");
             _virtualCamStartedByGui = false;
         }
     }
@@ -570,6 +733,8 @@ public sealed partial class MainWindow : Window
             _virtualCamRefreshInProgress = true;
             var response = await SendVirtualCamCommandAsync("STATUS");
             VirtualCamStatusBox.Text = response;
+            _virtualCamRunning = response.Contains("streaming=1", StringComparison.OrdinalIgnoreCase);
+            UpdateChromeSummary();
             if (appendOutput)
             {
                 AppendOutput(response, "virtualcam");
@@ -578,6 +743,8 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             VirtualCamStatusBox.Text = IsZh() ? "虚拟摄像头桥接未运行" : "virtual camera bridge is not running";
+            _virtualCamRunning = false;
+            UpdateChromeSummary();
             if (appendOutput)
             {
                 AppendOutput($"{ex.GetType().Name}: {ex.Message}", "virtualcam");
@@ -599,7 +766,10 @@ public sealed partial class MainWindow : Window
         var exe = ResolveVirtualCamBridgePath();
         if (exe == null)
         {
-            throw new FileNotFoundException(IsZh() ? "未找到虚拟摄像头桥接程序。" : "virtual camera bridge executable not found.");
+            throw new FileNotFoundException(
+                IsZh()
+                    ? "未找到虚拟摄像头桥接程序。请确认安装包中包含 virtualcam-bridge 组件，或先在仓库中构建 build/windows/virtualcam-bridge/Release/acb-virtualcam-bridge.exe。"
+                    : "Virtual camera bridge executable not found. Make sure the install includes the virtualcam-bridge component, or build build/windows/virtualcam-bridge/Release/acb-virtualcam-bridge.exe first.");
         }
 
         _virtualCamBridgeProcess = Process.Start(new ProcessStartInfo
@@ -614,19 +784,23 @@ public sealed partial class MainWindow : Window
         await Task.Delay(500);
     }
 
-    private static async Task<string> SendVirtualCamCommandAsync(string command)
+    private static async Task<string> SendVirtualCamCommandAsync(string command, TimeSpan? timeout = null)
     {
         using var pipe = new NamedPipeClientStream(".", VirtualCamPipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-        await pipe.ConnectAsync(cts.Token);
+        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(3));
+        await pipe.ConnectAsync(cts.Token).ConfigureAwait(false);
 
-        using var writer = new StreamWriter(pipe, Encoding.UTF8, leaveOpen: true) { AutoFlush = true };
-        using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
-        await writer.WriteLineAsync(command);
-        var response = await reader.ReadLineAsync(cts.Token);
+        using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+        using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+        await writer.WriteLineAsync(command).ConfigureAwait(false);
+        var response = await reader.ReadLineAsync(cts.Token).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(response))
         {
             throw new IOException("No response from virtual camera bridge.");
+        }
+        if (response.StartsWith("ERR", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(response);
         }
         return response;
     }
@@ -655,10 +829,257 @@ public sealed partial class MainWindow : Window
         {
             Path.Combine(baseDir, "acb-virtualcam-bridge.exe"),
             Path.Combine(baseDir, "virtualcam-bridge", "acb-virtualcam-bridge.exe"),
+            Path.GetFullPath(Path.Combine(baseDir, "..", "virtualcam-bridge", "acb-virtualcam-bridge.exe")),
+            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "virtualcam-bridge", "acb-virtualcam-bridge.exe")),
+            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "..", "..", "dist", "acb-win-x64", "virtualcam-bridge", "acb-virtualcam-bridge.exe")),
             Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "..", "..", "build", "windows", "virtualcam-bridge", "Release", "acb-virtualcam-bridge.exe"))
         };
 
         return candidates.FirstOrDefault(File.Exists);
+    }
+
+    private bool IsVirtualCamBridgeRunning()
+    {
+        return (_virtualCamBridgeProcess is { HasExited: false }) || Process.GetProcessesByName("acb-virtualcam-bridge").Any();
+    }
+
+    private void ShowSection(LeftSection section)
+    {
+        _activeSection = section;
+
+        if (SessionSection != null)
+        {
+            SessionSection.Visibility = section == LeftSection.Session ? Visibility.Visible : Visibility.Collapsed;
+        }
+        if (DevicesSection != null)
+        {
+            DevicesSection.Visibility = section == LeftSection.Devices ? Visibility.Visible : Visibility.Collapsed;
+        }
+        if (VirtualCamSection != null)
+        {
+            VirtualCamSection.Visibility = section == LeftSection.VirtualCam ? Visibility.Visible : Visibility.Collapsed;
+        }
+        if (LogsSection != null)
+        {
+            LogsSection.Visibility = section == LeftSection.Logs ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        UpdateSectionButtonStates();
+        UpdateChromeSummary();
+    }
+
+    private void UpdateSectionButtonStates()
+    {
+        UpdateSectionButtonVisual(SessionSectionButton, _activeSection == LeftSection.Session);
+        UpdateSectionButtonVisual(DevicesSectionButton, _activeSection == LeftSection.Devices);
+        UpdateSectionButtonVisual(VirtualCamSectionButton, _activeSection == LeftSection.VirtualCam);
+        UpdateSectionButtonVisual(LogsSectionButton, _activeSection == LeftSection.Logs);
+    }
+
+    private void UpdateChromeSummary()
+    {
+        if (!_uiInitialized)
+        {
+            return;
+        }
+
+        var zh = IsZh();
+        if (CurrentSectionTitleText != null)
+        {
+            CurrentSectionTitleText.Text = _activeSection switch
+            {
+                LeftSection.Devices => zh ? "设备与链路" : "Devices & Link",
+                LeftSection.VirtualCam => zh ? "虚拟摄像头" : "Virtual Camera",
+                LeftSection.Logs => zh ? "日志与诊断" : "Logs & Diagnostics",
+                _ => zh ? "会话控制" : "Session Control"
+            };
+        }
+
+        if (CurrentSectionSubtitleText != null)
+        {
+            CurrentSectionSubtitleText.Text = _activeSection switch
+            {
+                LeftSection.Devices => zh
+                    ? "管理 ADB、USB Native、USB AOA 连接和设备状态。"
+                    : "Manage ADB, USB Native, USB AOA connections, and device state.",
+                LeftSection.VirtualCam => zh
+                    ? "静默启动桥接程序，并把接收端画面投递到系统虚拟摄像头。"
+                    : "Silently launch the bridge and publish receiver frames into the system virtual camera.",
+                LeftSection.Logs => zh
+                    ? "查看运行时日志、Receiver 返回和自动化输出。"
+                    : "Review runtime logs, receiver responses, and automation output.",
+                _ => zh
+                    ? "调整画质与传输参数，启动会话并跟踪实时状态。"
+                    : "Adjust quality and transport, start sessions, and track live state."
+            };
+        }
+
+        if (SummaryReceiverValueText != null)
+        {
+            var receiver = NormalizeReceiverForVirtualCam(ReceiverAddressBox?.Text);
+            SummaryReceiverValueText.Text = string.IsNullOrWhiteSpace(receiver)
+                ? (zh ? "未设置" : "Not set")
+                : receiver;
+        }
+
+        if (SummaryTransportValueText != null)
+        {
+            SummaryTransportValueText.Text = GetTransportSummaryLabel(zh);
+        }
+
+        if (SummarySessionValueText != null)
+        {
+            SummarySessionValueText.Text = _sessionRunning
+                ? (zh ? "已连接" : "Connected")
+                : (zh ? "空闲" : "Idle");
+        }
+
+        if (SummaryVirtualCamValueText != null)
+        {
+            SummaryVirtualCamValueText.Text = _virtualCamRunning
+                ? (zh ? "运行中" : "Running")
+                : (zh ? "未启动" : "Stopped");
+        }
+    }
+
+    private string GetTransportSummaryLabel(bool zh)
+    {
+        return GetComboValue(TransportBox, "usb-adb") switch
+        {
+            "usb-native" => zh ? "USB Native" : "USB Native",
+            "usb-aoa" => zh ? "USB AOA" : "USB AOA",
+            "lan" => zh ? "无线局域网" : "LAN",
+            _ => zh ? "USB ADB" : "USB ADB"
+        };
+    }
+
+    private void UpdateBuildIdentity()
+    {
+        if (BuildVersionText == null || BuildChannelText == null)
+        {
+            return;
+        }
+
+        var zh = IsZh();
+        var version = GetApplicationVersion();
+        var channel = GetBuildChannelLabel(zh);
+        BuildVersionText.Text = $"ACB {version}";
+        BuildChannelText.Text = zh
+            ? $"渠道 · {channel}"
+            : $"Channel · {channel}";
+        if (TitleBarVersionChipText != null)
+        {
+            TitleBarVersionChipText.Text = $"v{version}";
+        }
+        if (TitleBarChannelChipText != null)
+        {
+            TitleBarChannelChipText.Text = channel;
+        }
+    }
+
+    private static string GetApplicationVersion()
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        var informational = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(informational))
+        {
+            var plusIndex = informational.IndexOf('+');
+            return plusIndex > 0 ? informational.Substring(0, plusIndex) : informational;
+        }
+
+        return assembly.GetName().Version?.ToString(3) ?? "1.0.0";
+    }
+
+    private static string GetBuildChannelLabel(bool zh)
+    {
+        var version = GetApplicationVersion().ToLowerInvariant();
+        if (version.Contains("-local", StringComparison.Ordinal) || version.Contains("-dev", StringComparison.Ordinal))
+        {
+            return zh ? "开发版" : "Dev";
+        }
+        if (version.Contains("-preview", StringComparison.Ordinal) ||
+            version.Contains("-alpha", StringComparison.Ordinal) ||
+            version.Contains("-beta", StringComparison.Ordinal) ||
+            version.Contains("-rc", StringComparison.Ordinal))
+        {
+            return zh ? "预览版" : "Preview";
+        }
+        return zh ? "正式版" : "Release";
+    }
+
+    private static void UpdateSectionButtonVisual(Button? button, bool active)
+    {
+        if (button == null)
+        {
+            return;
+        }
+
+        button.Opacity = active ? 1.0 : 0.72;
+        button.FontWeight = active ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal;
+        button.Background = Application.Current.Resources[active ? "AppNavActiveBrush" : "AppNavInactiveBrush"] as Microsoft.UI.Xaml.Media.Brush;
+        button.BorderThickness = new Thickness(active ? 1 : 0);
+    }
+
+    private void ShutdownManagedProcessesOnExit()
+    {
+        if (_virtualCamStartedByGui)
+        {
+            try
+            {
+                SendVirtualCamCommandAsync("EXIT", TimeSpan.FromMilliseconds(1200)).GetAwaiter().GetResult();
+                AppLogger.Info("virtual camera bridge exit command sent during shutdown");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("virtual camera bridge exit command failed during shutdown", ex);
+            }
+
+            DisposeManagedProcess(ref _virtualCamBridgeProcess, "virtual camera bridge");
+            _virtualCamStartedByGui = false;
+            _virtualCamRunning = false;
+        }
+
+        if ((AutoStopReceiverBox?.IsChecked ?? true) && _receiverStartedByGui)
+        {
+            DisposeManagedProcess(ref _receiverProcess, "managed receiver");
+            _receiverStartedByGui = false;
+            AppLogger.Info("managed receiver process stopped on exit");
+        }
+    }
+
+    private static void DisposeManagedProcess(ref Process? process, string label)
+    {
+        var target = process;
+        process = null;
+        if (target == null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!target.HasExited && !target.WaitForExit(1200))
+            {
+                target.Kill(true);
+                target.WaitForExit(1200);
+                AppLogger.Info($"{label} terminated after graceful shutdown timeout");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error($"{label} shutdown failed", ex);
+        }
+        finally
+        {
+            try
+            {
+                target.Dispose();
+            }
+            catch
+            {
+                // Ignore process disposal race.
+            }
+        }
     }
 
     private void OnWindowClosed(object sender, WindowEventArgs args)
@@ -670,18 +1091,7 @@ public sealed partial class MainWindow : Window
             _usbAoaTimer.Stop();
             _virtualCamTimer.Stop();
             AppLogger.LineWritten -= OnAppLogLineWritten;
-            if (_virtualCamStartedByGui)
-            {
-                StopVirtualCamAsync(true).GetAwaiter().GetResult();
-            }
-            if ((AutoStopReceiverBox.IsChecked ?? true) && _receiverStartedByGui && _receiverProcess is { HasExited: false })
-            {
-                _receiverProcess.Kill(true);
-                _receiverProcess.Dispose();
-                _receiverProcess = null;
-                _receiverStartedByGui = false;
-                AppLogger.Info("managed receiver process stopped on exit");
-            }
+            ShutdownManagedProcessesOnExit();
         }
         catch
         {
@@ -768,13 +1178,22 @@ public sealed partial class MainWindow : Window
     private void ApplyLanguage()
     {
         if (!_uiInitialized) return;
-        if (AppTitleText == null || ConnectionTitleText == null || OutputTitleText == null) return;
+        if (OutputTitleText == null) return;
 
         var zh = IsZh();
-        Title = "ACB Receiver";
-        AppTitleText.Text = "ACB Receiver";
-        ConnectionTitleText.Text = zh ? "连接" : "Connection";
-        OutputTitleText.Text = zh ? "输出" : "Output";
+        Title = "Android Cam Bridge";
+        if (TitleBarAppNameText != null)
+        {
+            TitleBarAppNameText.Text = zh ? "Android Cam Bridge" : "Android Cam Bridge";
+        }
+        if (TitleBarSubtitleText != null)
+        {
+            TitleBarSubtitleText.Text = zh ? "接收端" : "Receiver";
+        }
+        OutputTitleText.Text = zh ? "日志视图" : "Logs";
+        OutputSubtitleText.Text = zh
+            ? "按级别、来源或关键字筛选运行日志与返回结果。"
+            : "Filter runtime logs and responses by level, source, or keyword.";
         LanguageLabelText.Text = zh ? "语言" : "Language";
         ReceiverUrlLabelText.Text = zh ? "Receiver 地址" : "Receiver URL";
         ConnectionModeLabelText.Text = zh ? "连接模式" : "Connection Mode";
@@ -797,6 +1216,14 @@ public sealed partial class MainWindow : Window
         VirtualCamReceiverBox.PlaceholderText = zh ? "虚拟摄像头拉流地址 host:port" : "virtual camera receiver host:port";
         VirtualCamIntervalBox.PlaceholderText = zh ? "轮询间隔 ms" : "interval ms";
         VirtualCamStatusBox.PlaceholderText = zh ? "虚拟摄像头状态" : "virtual camera status";
+        SessionSectionButtonText.Text = zh ? "会话" : "Session";
+        DevicesSectionButtonText.Text = zh ? "设备" : "Devices";
+        VirtualCamSectionButtonText.Text = zh ? "虚拟摄像头" : "Virtual Camera";
+        LogsSectionButtonText.Text = zh ? "日志" : "Logs";
+        SummaryReceiverLabelText.Text = zh ? "接收端" : "Receiver";
+        SummaryTransportLabelText.Text = zh ? "传输" : "Transport";
+        SummarySessionLabelText.Text = zh ? "会话" : "Session";
+        SummaryVirtualCamLabelText.Text = zh ? "虚拟摄像头" : "Virtual Cam";
 
         ConnectionModeManagedItem.Content = zh ? "托管（自动）" : "Managed";
         ConnectionModeAttachItem.Content = zh ? "附加（仅连接）" : "Attach";
@@ -827,11 +1254,26 @@ public sealed partial class MainWindow : Window
         VirtualCamStartButton.Content = zh ? "启动虚拟摄像头" : "Start Virtual Camera";
         VirtualCamStopButton.Content = zh ? "停止虚拟摄像头" : "Stop Virtual Camera";
         VirtualCamStatusButton.Content = zh ? "刷新状态" : "Refresh Status";
+        ClearLogsButton.Content = zh ? "清空" : "Clear";
+        LogAutoScrollBox.Content = zh ? "自动跟随" : "Auto-follow";
+        (LogLevelFilterBox.Items[0] as ComboBoxItem)!.Content = zh ? "全部级别" : "All levels";
+        (LogLevelFilterBox.Items[1] as ComboBoxItem)!.Content = zh ? "信息" : "Info";
+        (LogLevelFilterBox.Items[2] as ComboBoxItem)!.Content = zh ? "错误" : "Error";
+        (LogLevelFilterBox.Items[3] as ComboBoxItem)!.Content = zh ? "事件" : "Event";
+        (LogSourceFilterBox.Items[0] as ComboBoxItem)!.Content = zh ? "全部来源" : "All sources";
+        (LogSourceFilterBox.Items[1] as ComboBoxItem)!.Content = zh ? "应用" : "App";
+        (LogSourceFilterBox.Items[2] as ComboBoxItem)!.Content = zh ? "会话" : "Session";
+        (LogSourceFilterBox.Items[3] as ComboBoxItem)!.Content = zh ? "设备" : "Devices";
+        (LogSourceFilterBox.Items[4] as ComboBoxItem)!.Content = zh ? "虚拟摄像头" : "Virtual Camera";
+        LogSearchBox.PlaceholderText = zh ? "筛选日志" : "Filter logs";
         AutoRefreshButton.Content = _autoRefreshEnabled
             ? (zh ? "关闭自动刷新（5秒）" : "Disable Auto Refresh (5s)")
             : (zh ? "开启自动刷新（5秒）" : "Auto Refresh Stats (5s)");
+        UpdateSectionButtonStates();
         UpdateUsbNativePanelVisibility();
         UpdateUsbAoaPanelVisibility();
+        UpdateChromeSummary();
+        UpdateBuildIdentity();
     }
 
     private void OnLanguageChanged(object sender, SelectionChangedEventArgs e)
@@ -885,25 +1327,27 @@ public sealed partial class MainWindow : Window
 
         DispatcherQueue.TryEnqueue(() =>
         {
-            if (!_uiInitialized || OutputBox == null)
+            if (!_uiInitialized || LogsListView == null)
             {
                 return;
             }
 
-            AppendTextEntry(line.TrimEnd(), alreadyFormatted: true);
+            AddAppLogEntry(line.TrimEnd());
         });
     }
 
     private void AppendOutput(string message, string? tag = null)
     {
-        if (string.IsNullOrWhiteSpace(message)) return;
-        var prefix = $"[{DateTime.Now:HH:mm:ss}]";
-        if (!string.IsNullOrWhiteSpace(tag))
+        if (string.IsNullOrWhiteSpace(message))
         {
-            prefix += $" [{tag}]";
+            return;
         }
 
-        AppendTextEntry(prefix + Environment.NewLine + message.Trim(), alreadyFormatted: true);
+        AddLogEntry(
+            level: string.Equals(tag, "error", StringComparison.OrdinalIgnoreCase) ? "ERROR" : "EVENT",
+            source: NormalizeLogSource(tag),
+            message: message.Trim(),
+            timestamp: DateTime.Now);
     }
 
     private void AppendError(Exception ex)
@@ -911,57 +1355,148 @@ public sealed partial class MainWindow : Window
         AppendOutput($"{ex.GetType().Name}: {ex.Message}", "error");
     }
 
-    private void AppendTextEntry(string text, bool alreadyFormatted)
+    private void AddAppLogEntry(string line)
     {
-        if (OutputBox == null || string.IsNullOrWhiteSpace(text))
+        if (string.IsNullOrWhiteSpace(line))
         {
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(OutputBox.Text))
+        var level = "INFO";
+        var message = line;
+        var split = line.IndexOf("] ", StringComparison.Ordinal);
+        if (split >= 0 && split + 2 < line.Length)
         {
-            OutputBox.Text += Environment.NewLine + Environment.NewLine;
-        }
-        OutputBox.Text += alreadyFormatted ? text : text.Trim();
-        ScrollOutputToEnd();
-    }
-
-    private void ScrollOutputToEnd()
-    {
-        if (OutputBox == null)
-        {
-            return;
-        }
-
-        OutputBox.SelectionStart = OutputBox.Text.Length;
-        OutputBox.SelectionLength = 0;
-        OutputBox.UpdateLayout();
-        var scrollViewer = FindDescendantScrollViewer(OutputBox);
-        scrollViewer?.ChangeView(null, scrollViewer.ScrollableHeight, null, true);
-    }
-
-    private static ScrollViewer? FindDescendantScrollViewer(DependencyObject root)
-    {
-        if (root is ScrollViewer scrollViewer)
-        {
-            return scrollViewer;
-        }
-
-        var childCount = VisualTreeHelper.GetChildrenCount(root);
-        for (var i = 0; i < childCount; i++)
-        {
-            var match = FindDescendantScrollViewer(VisualTreeHelper.GetChild(root, i));
-            if (match != null)
+            var rest = line.Substring(split + 2);
+            if (rest.StartsWith("ERROR ", StringComparison.OrdinalIgnoreCase))
             {
-                return match;
+                level = "ERROR";
+                message = rest.Substring(6);
+            }
+            else if (rest.StartsWith("INFO ", StringComparison.OrdinalIgnoreCase))
+            {
+                level = "INFO";
+                message = rest.Substring(5);
+            }
+            else
+            {
+                message = rest;
             }
         }
 
-        return null;
+        AddLogEntry(level, "app", message, DateTime.Now);
+    }
+
+    private void AddLogEntry(string level, string source, string message, DateTime timestamp)
+    {
+        var entry = new LogEntryItem(
+            timestamp: timestamp,
+            timestampText: timestamp.ToString("HH:mm:ss"),
+            levelText: string.IsNullOrWhiteSpace(level) ? "EVENT" : level,
+            sourceText: NormalizeLogSource(source),
+            message: message);
+
+        _allLogEntries.Add(entry);
+        if (MatchesLogFilters(entry))
+        {
+            _visibleLogEntries.Add(entry);
+            TryAutoScrollLogs();
+        }
+    }
+
+    private bool MatchesLogFilters(LogEntryItem entry)
+    {
+        var levelFilter = GetComboTag(LogLevelFilterBox, "all");
+        if (levelFilter != "all" && !string.Equals(entry.LevelText, levelFilter, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var sourceFilter = GetComboTag(LogSourceFilterBox, "all");
+        if (sourceFilter != "all" && !string.Equals(entry.SourceText, sourceFilter, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var query = LogSearchBox?.Text?.Trim();
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            var haystack = $"{entry.SourceText} {entry.LevelText} {entry.Message}".ToLowerInvariant();
+            if (!haystack.Contains(query.ToLowerInvariant(), StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private string NormalizeLogSource(string? source)
+    {
+        var value = source?.Trim().ToLowerInvariant().Replace(" ", string.Empty) ?? "app";
+        return value switch
+        {
+            "" => "app",
+            var v when v.Contains("virtualcam") => "virtualcam",
+            var v when v.Contains("usb") || v.Contains("adb") || v.Contains("device") => "devices",
+            var v when v.Contains("session") || v.Contains("stats") => "session",
+            var v when v.Contains("error") => "app",
+            _ => "app"
+        };
+    }
+
+    private static string GetComboTag(ComboBox? comboBox, string fallback)
+    {
+        if (comboBox?.SelectedItem is ComboBoxItem item)
+        {
+            return item.Tag?.ToString() ?? fallback;
+        }
+        return fallback;
+    }
+
+    private void OnLogFilterChanged(object sender, object e)
+    {
+        RefreshLogEntries();
+    }
+
+    private void RefreshLogEntries()
+    {
+        _visibleLogEntries.Clear();
+        foreach (var entry in _allLogEntries.Where(MatchesLogFilters))
+        {
+            _visibleLogEntries.Add(entry);
+        }
+        TryAutoScrollLogs();
+    }
+
+    private void OnClearLogs(object sender, RoutedEventArgs e)
+    {
+        _allLogEntries.Clear();
+        _visibleLogEntries.Clear();
+    }
+
+    private void TryAutoScrollLogs()
+    {
+        if (!(LogAutoScrollBox?.IsChecked ?? true) || LogsListView == null || _visibleLogEntries.Count == 0)
+        {
+            return;
+        }
+
+        var last = _visibleLogEntries[^1];
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            LogsListView.UpdateLayout();
+            LogsListView.ScrollIntoView(last, ScrollIntoViewAlignment.Leading);
+        });
     }
 
     private void UpdateUsbNativePanelVisibility()
     {
+        if (TransportBox == null || UsbNativePanel == null)
+        {
+            return;
+        }
+
         UsbNativePanel.Visibility = GetComboValue(TransportBox, "usb-adb") == "usb-native"
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -969,6 +1504,11 @@ public sealed partial class MainWindow : Window
 
     private void UpdateUsbAoaPanelVisibility()
     {
+        if (TransportBox == null || UsbAoaPanel == null)
+        {
+            return;
+        }
+
         UsbAoaPanel.Visibility = GetComboValue(TransportBox, "usb-adb") == "usb-aoa"
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -1084,6 +1624,24 @@ public sealed partial class MainWindow : Window
         else
         {
             UsbNativeSelectedDeviceBox.Text = string.Empty;
+        }
+    }
+
+    private sealed class LogEntryItem
+    {
+        public DateTime Timestamp { get; }
+        public string TimestampText { get; }
+        public string LevelText { get; }
+        public string SourceText { get; }
+        public string Message { get; }
+
+        public LogEntryItem(DateTime timestamp, string timestampText, string levelText, string sourceText, string message)
+        {
+            Timestamp = timestamp;
+            TimestampText = timestampText;
+            LevelText = levelText;
+            SourceText = sourceText;
+            Message = message;
         }
     }
 

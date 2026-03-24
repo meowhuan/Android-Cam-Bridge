@@ -228,6 +228,11 @@ class MainActivity : AppCompatActivity() {
         backgroundStreamingCheckbox?.setOnCheckedChangeListener { _, checked ->
             backgroundStreamingEnabled = checked
             persistFlags()
+            if (availableProfiles.isNotEmpty()) {
+                updateTorchAvailability()
+                updateActualProfileText(currentCaptureSpec())
+                refreshPreviewSpec("background_streaming_toggle")
+            }
         }
         debugModeCheckbox?.setOnCheckedChangeListener { _, checked ->
             debugModeEnabled = checked
@@ -241,8 +246,23 @@ class MainActivity : AppCompatActivity() {
         torchCheckbox?.setOnCheckedChangeListener { _, _ ->
             if (!suppressSelectionCallbacks) {
                 updateTorchAvailability()
-                updateActualProfileText(currentCaptureSpec())
-                if (!isStreaming) {
+                val spec = currentCaptureSpec()
+                if (isStreaming) {
+                    if (backgroundStreamingEnabled) {
+                        val mode = currentTransportMode()
+                        val receiver = currentReceiverForMode(mode)
+                        renderStreamState(StreamUiState.CONNECTING, "Updating torch")
+                        startBackgroundStreaming(mode, receiver, spec, micCheckbox?.isChecked == true)
+                    } else {
+                        val updatedProfile = controller.updateTorchEnabled(spec.torchEnabled)
+                        if (updatedProfile != null) {
+                            updateActualProfileText(updatedProfile.actualLabel, spec.mode, updatedProfile.torchEnabled)
+                        } else {
+                            updateActualProfileText(spec)
+                        }
+                    }
+                } else {
+                    updateActualProfileText(spec)
                     refreshPreviewSpec("torch_toggle")
                 }
             }
@@ -290,7 +310,13 @@ class MainActivity : AppCompatActivity() {
             val mode = currentTransportMode()
             val spec = currentCaptureSpec()
             val receiver = currentReceiverForMode(mode)
-            val actualProfile = runCatching { CameraSurfacePipeline.prepareCaptureProfile(this, spec) }.getOrNull()
+            val actualProfile = runCatching {
+                CameraSurfacePipeline.prepareCaptureProfile(
+                    context = this,
+                    spec = spec,
+                    allowHighSpeed = backgroundStreamingEnabled,
+                )
+            }.getOrNull()
 
             if (mode == CameraController.TransportMode.USB_AOA) {
                 if (backgroundStreamingEnabled) {
@@ -431,10 +457,14 @@ class MainActivity : AppCompatActivity() {
         val profile = availableProfiles.getOrNull(captureProfileSpinner?.selectedItemPosition ?: 0)
             ?: CameraSurfacePipeline.chooseProfileForRequest(this, 1280, 720, 30)
             ?: throw IllegalStateException("No capture profiles available")
-        val mode = modeOptions.getOrNull(captureModeSpinner?.selectedItemPosition ?: 1)?.preset
-            ?: CaptureModePreset.BALANCED
-        val torchEnabled = torchCheckbox?.isChecked == true && profile.supportsTorch
+        val mode = currentCaptureModePreset()
+        val torchEnabled = torchCheckbox?.isChecked == true && canEnableTorch(profile)
         return CaptureSpec(profile = profile, mode = mode, torchEnabled = torchEnabled)
+    }
+
+    private fun currentCaptureModePreset(): CaptureModePreset {
+        return modeOptions.getOrNull(captureModeSpinner?.selectedItemPosition ?: 1)?.preset
+            ?: CaptureModePreset.BALANCED
     }
 
     private fun currentTransportMode(): CameraController.TransportMode {
@@ -481,7 +511,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateActualProfileText(spec: CaptureSpec) {
-        val actualProfile = runCatching { CameraSurfacePipeline.prepareCaptureProfile(this, spec) }.getOrNull()
+        val actualProfile = runCatching {
+            CameraSurfacePipeline.prepareCaptureProfile(
+                context = this,
+                spec = spec,
+                allowHighSpeed = backgroundStreamingEnabled,
+            )
+        }.getOrNull()
         if (actualProfile != null) {
             updateActualProfileText(actualProfile.actualLabel, spec.mode, actualProfile.torchEnabled)
         } else {
@@ -504,13 +540,33 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateTorchAvailability() {
         val profile = availableProfiles.getOrNull(captureProfileSpinner?.selectedItemPosition ?: 0)
-        val available = profile?.supportsTorch == true
+        val available = canEnableTorch(profile)
         torchCheckbox?.isEnabled = available
         if (!available) {
             suppressSelectionCallbacks = true
             torchCheckbox?.isChecked = false
             suppressSelectionCallbacks = false
         }
+    }
+
+    private fun canEnableTorch(profile: SupportedCaptureProfile?): Boolean {
+        val selected = profile ?: return false
+        if (!selected.supportsTorch) {
+            return false
+        }
+
+        val probeSpec = CaptureSpec(
+            profile = selected,
+            mode = currentCaptureModePreset(),
+            torchEnabled = true,
+        )
+        return runCatching {
+            CameraSurfacePipeline.prepareCaptureProfile(
+                context = this,
+                spec = probeSpec,
+                allowHighSpeed = backgroundStreamingEnabled,
+            )
+        }.getOrNull()?.torchEnabled == true
     }
 
     private fun showPreviewSurfaces(idleVisible: Boolean, streamVisible: Boolean) {
