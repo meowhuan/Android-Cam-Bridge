@@ -27,7 +27,7 @@ FORMAT_BGRA = 1
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--tag", default=DEFAULT_TAG, help="Shared memory tag name")
-    p.add_argument("--fps", type=int, default=30, help="Virtual camera FPS")
+    p.add_argument("--fps", type=int, default=60, help="Virtual camera FPS")
     p.add_argument("--device", default="", help="Virtual camera device name (optional)")
     p.add_argument("--wait-timeout", type=int, default=30, help="Seconds to wait for shared memory")
     return p.parse_args()

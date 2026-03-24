@@ -17,10 +17,14 @@ struct VideoConfig {
   uint32_t height = 1080;
   uint32_t fps = 30;
   uint32_t bitrate = 5000000;
+  uint32_t keyint = 60;
 };
 
 struct AudioConfig {
   bool enabled = true;
+  uint32_t sampleRate = 48000;
+  uint32_t channels = 1;
+  uint32_t bitrate = 96000;
 };
 
 struct SessionStartRequest {
@@ -67,6 +71,8 @@ class ReceiverServer {
   uintptr_t listenSocket_ = static_cast<uintptr_t>(~0ULL);
   std::mutex frameMutex_;
   FrameState frameState_;
+  std::mutex sessionMutex_;
+  SessionStartRequest activeSessionRequest_;
   std::string activeSessionId_ = "sess_demo_001";
   std::string activeAuthToken_ = "token_demo";
   std::string activeTransport_ = "lan";

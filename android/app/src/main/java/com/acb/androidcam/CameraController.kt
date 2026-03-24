@@ -21,6 +21,13 @@ class CameraController(
     private val onDebugEvent: ((String) -> Unit)? = null,
     private val onStreamStateChanged: ((StreamUiState, String) -> Unit)? = null,
 ) {
+    companion object {
+        private const val AUDIO_SAMPLE_RATE = 48_000
+        private const val AUDIO_CHANNELS = 1
+        private const val AUDIO_BITRATE = 96_000
+        private const val VIDEO_KEYINT_SECONDS = 1
+    }
+
     enum class TransportMode { LAN, USB_ADB, USB_NATIVE, USB_AOA }
 
     private val audioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -104,7 +111,9 @@ class CameraController(
         }
         startSessionLoop(
             transportName = transportName,
-            captureSpec = captureSpec,
+            actualProfile = captureProfile,
+            actualBitrate = effectiveBitrate,
+            audioEnabled = pushMic,
         )
 
         if (pushMic) {
@@ -198,7 +207,7 @@ class CameraController(
         micRunning.set(true)
 
         audioExecutor.execute {
-            val sampleRate = 48_000
+            val sampleRate = AUDIO_SAMPLE_RATE
             val channelConfig = AudioFormat.CHANNEL_IN_MONO
             val encoding = AudioFormat.ENCODING_PCM_16BIT
             val minBuffer = AudioRecord.getMinBufferSize(sampleRate, channelConfig, encoding)
@@ -252,7 +261,9 @@ class CameraController(
 
     private fun startSessionLoop(
         transportName: String,
-        captureSpec: CaptureSpec,
+        actualProfile: CameraSurfacePipeline.CaptureProfile,
+        actualBitrate: Int,
+        audioEnabled: Boolean,
     ) {
         if (!sessionLoopRunning.compareAndSet(false, true)) return
         sessionExecutor.execute {
@@ -263,14 +274,33 @@ class CameraController(
                     continue
                 }
 
-                val v2Session = v2Client.startSession(currentReceiver, transportName)
+                val v2Session = v2Client.startSession(
+                    receiverAddress = currentReceiver,
+                    transport = transportName,
+                    videoWidth = actualProfile.captureSize.width,
+                    videoHeight = actualProfile.captureSize.height,
+                    videoFps = actualProfile.actualFpsRange.upper,
+                    videoBitrate = actualBitrate,
+                    videoKeyInt = maxOf(1, actualProfile.actualFpsRange.upper * VIDEO_KEYINT_SECONDS),
+                    audioEnabled = audioEnabled,
+                    audioSampleRate = AUDIO_SAMPLE_RATE,
+                    audioChannels = AUDIO_CHANNELS,
+                    audioBitrate = AUDIO_BITRATE,
+                )
                 if (!running.get()) break
 
                 if (v2Session != null) {
                     try {
-                        if (audioEncoder == null) {
-                            audioEncoder = AudioAacEncoder(sampleRate = 48_000, channels = 1, bitrate = 96_000)
-                            AppLog.i("ACB", "audio encoder ready sampleRate=48000 channels=1 bitrate=96000")
+                        if (audioEnabled && audioEncoder == null) {
+                            audioEncoder = AudioAacEncoder(
+                                sampleRate = AUDIO_SAMPLE_RATE,
+                                channels = AUDIO_CHANNELS,
+                                bitrate = AUDIO_BITRATE,
+                            )
+                            AppLog.i(
+                                "ACB",
+                                "audio encoder ready sampleRate=$AUDIO_SAMPLE_RATE channels=$AUDIO_CHANNELS bitrate=$AUDIO_BITRATE",
+                            )
                         }
                     } catch (t: Throwable) {
                         val line = "encoder init failed: ${t.message}"
@@ -281,9 +311,10 @@ class CameraController(
                         sleepQuietly(1000)
                         continue
                     }
-                    emitStreamState(StreamUiState.CONNECTING, "Connecting ${captureSpec.displayLabel}")
+                    emitStreamState(StreamUiState.CONNECTING, "Connecting ${actualProfile.actualLabel}")
                     v2Client.connect(v2Session.wsUrl)
-                    val line = "v2 session connect attempt ok transport=$transportName receiver=$currentReceiver"
+                    val line =
+                        "v2 session connect attempt ok transport=$transportName receiver=$currentReceiver actual=${actualProfile.actualLabel} bitrate=$actualBitrate audio=$audioEnabled"
                     AppLog.i("ACB", line)
                     onDebugEvent?.invoke(line)
                     attempt = 0
@@ -310,14 +341,13 @@ class CameraController(
 
     private fun chooseEffectiveBitrate(width: Int, height: Int, fps: Int, preferredBitrate: Int): Int {
         val recommended = when {
-            width >= 1920 -> if (fps >= 60) 12_000_000 else 8_000_000
-            width >= 1280 -> if (fps >= 60) 7_000_000 else 4_500_000
-            else -> if (fps >= 60) 3_500_000 else 2_000_000
+            width >= 1920 -> if (fps >= 60) 18_000_000 else 12_000_000
+            width >= 1280 -> if (fps >= 60) 12_000_000 else 7_000_000
+            else -> if (fps >= 60) 5_000_000 else 3_000_000
         }
         return when {
             preferredBitrate <= 0 -> recommended
-            preferredBitrate > recommended -> recommended
-            else -> preferredBitrate
+            else -> maxOf(preferredBitrate, recommended)
         }
     }
 

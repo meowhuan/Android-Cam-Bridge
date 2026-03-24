@@ -356,6 +356,57 @@ uint32_t JsonFieldUInt(const std::string& body, const std::string& key, uint32_t
   return static_cast<uint32_t>(std::strtoul(body.substr(start, end - start).c_str(), nullptr, 10));
 }
 
+bool JsonFieldBool(const std::string& body, const std::string& key, bool fallback) {
+  const std::string token = "\"" + key + "\"";
+  const auto keyPos = body.find(token);
+  if (keyPos == std::string::npos) {
+    return fallback;
+  }
+  const auto colon = body.find(':', keyPos + token.size());
+  if (colon == std::string::npos) {
+    return fallback;
+  }
+  size_t start = colon + 1;
+  while (start < body.size() && std::isspace(static_cast<unsigned char>(body[start]))) {
+    ++start;
+  }
+  if (body.compare(start, 4, "true") == 0) {
+    return true;
+  }
+  if (body.compare(start, 5, "false") == 0) {
+    return false;
+  }
+  return fallback;
+}
+
+std::string JsonObjectBody(const std::string& body, const std::string& key) {
+  const std::string token = "\"" + key + "\"";
+  const auto keyPos = body.find(token);
+  if (keyPos == std::string::npos) {
+    return "";
+  }
+  const auto colon = body.find(':', keyPos + token.size());
+  if (colon == std::string::npos) {
+    return "";
+  }
+  const auto braceStart = body.find('{', colon + 1);
+  if (braceStart == std::string::npos) {
+    return "";
+  }
+  int depth = 0;
+  for (size_t i = braceStart; i < body.size(); ++i) {
+    if (body[i] == '{') {
+      ++depth;
+    } else if (body[i] == '}') {
+      --depth;
+      if (depth == 0) {
+        return body.substr(braceStart, i - braceStart + 1);
+      }
+    }
+  }
+  return "";
+}
+
 std::string Utf16ToUtf8(const std::wstring& w) {
   if (w.empty()) return "";
   const int size = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
@@ -1438,6 +1489,20 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
 
   if (req.method == "POST" && req.path == "/api/v2/session/start") {
     const std::string transport = JsonField(req.body, "transport", "lan");
+    const std::string videoBody = JsonObjectBody(req.body, "video");
+    const std::string audioBody = JsonObjectBody(req.body, "audio");
+    SessionStartRequest sessionReq;
+    sessionReq.transport = transport;
+    sessionReq.deviceId = JsonField(req.body, "deviceId", "");
+    sessionReq.video.width = JsonFieldUInt(videoBody, "width", sessionReq.video.width);
+    sessionReq.video.height = JsonFieldUInt(videoBody, "height", sessionReq.video.height);
+    sessionReq.video.fps = JsonFieldUInt(videoBody, "fps", sessionReq.video.fps);
+    sessionReq.video.bitrate = JsonFieldUInt(videoBody, "bitrate", sessionReq.video.bitrate);
+    sessionReq.video.keyint = JsonFieldUInt(videoBody, "keyint", sessionReq.video.keyint);
+    sessionReq.audio.enabled = JsonFieldBool(audioBody, "enabled", sessionReq.audio.enabled);
+    sessionReq.audio.sampleRate = JsonFieldUInt(audioBody, "sampleRate", sessionReq.audio.sampleRate);
+    sessionReq.audio.channels = JsonFieldUInt(audioBody, "channels", sessionReq.audio.channels);
+    sessionReq.audio.bitrate = JsonFieldUInt(audioBody, "bitrate", sessionReq.audio.bitrate);
     if (transport == "usb-adb") {
       RunCommandHidden("adb reverse tcp:39393 tcp:39393");
       RunCommandHidden("adb forward tcp:39394 tcp:39394");
@@ -1485,6 +1550,10 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
       if (!usbAoaConnected_ || !usbAoa_ || !usbAoa_->IsConnected()) {
         return Json(503, R"({"error":"usb_aoa_not_connected","hint":"call POST /api/v2/usb-aoa/connect first"})");
       }
+    }
+    {
+      std::lock_guard<std::mutex> lock(sessionMutex_);
+      activeSessionRequest_ = sessionReq;
     }
     activeTransport_ = transport;
     activeSessionId_ = "sess_v2_" + std::to_string(NowMs());
@@ -1738,7 +1807,13 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
 
     const uint64_t now = NowMs();
     const bool alive = (lastMs != 0 && (now - lastMs) < 2000);
-    const int fps = alive ? 30 : 0;
+    SessionStartRequest sessionReq;
+    {
+      std::lock_guard<std::mutex> lock(sessionMutex_);
+      sessionReq = activeSessionRequest_;
+    }
+    const int fps = alive ? static_cast<int>(sessionReq.video.fps) : 0;
+    const uint32_t bitrate = sessionReq.video.bitrate;
     bool usbNativeConnected = false;
     std::string usbNativeError;
     bool usbLinkActive = false;
@@ -1762,7 +1837,11 @@ std::string ReceiverServer::HandleRequest(const std::string& request) {
     body << "{\"sessionId\":\"" << JsonEscape(activeSessionId_)
          << "\",\"transport\":\"" << JsonEscape(activeTransport_)
          << "\",\"rtt\":12,\"fps\":" << fps
-         << ",\"bitrate\":4000000,\"droppedFrames\":0,\"reconnectCount\":0,\"frameCount\":" << frameCount
+         << ",\"bitrate\":" << bitrate
+         << ",\"width\":" << sessionReq.video.width
+         << ",\"height\":" << sessionReq.video.height
+         << ",\"keyint\":" << sessionReq.video.keyint
+         << ",\"droppedFrames\":0,\"reconnectCount\":0,\"frameCount\":" << frameCount
          << ",\"audioBytes\":" << audioBytes
          << ",\"audioPackets\":" << audioPackets
          << ",\"audioSampleRate\":" << audioSampleRate

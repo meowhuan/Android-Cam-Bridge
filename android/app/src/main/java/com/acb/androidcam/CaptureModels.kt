@@ -8,14 +8,25 @@ data class SupportedCaptureProfile(
     val targetFps: Int,
     val recommendedBitrate: Int,
     val supportsTorch: Boolean,
+    val deliveryMode: CaptureDeliveryMode = CaptureDeliveryMode.STANDARD,
 ) {
     val aspectRatio: Float
         get() = if (height <= 0) 16f / 9f else width.toFloat() / height.toFloat()
 
     val displayLabel: String
-        get() = "${width}x${height} @ ${targetFps} FPS"
+        get() = buildString {
+            append("${width}x${height} @ ${targetFps} FPS")
+            if (deliveryMode == CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED) {
+                append(" (HS)")
+            }
+        }
 
     override fun toString(): String = displayLabel
+}
+
+enum class CaptureDeliveryMode {
+    STANDARD,
+    CONSTRAINED_HIGH_SPEED,
 }
 
 enum class CaptureModePreset {

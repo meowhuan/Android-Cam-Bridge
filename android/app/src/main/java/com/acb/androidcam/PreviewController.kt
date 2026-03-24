@@ -108,37 +108,59 @@ class PreviewController(
             return
         }
 
-        val profile = spec.profile
+        val actualProfile = CameraSurfacePipeline.prepareCaptureProfile(context, spec)
+        val profile = actualProfile.selectedProfile
         val selector = buildCameraSelector(profile.cameraId)
         val rotation = previewView.display?.rotation ?: Surface.ROTATION_0
-        emitState(PreviewUiState.STARTING, "Binding preview ${profile.width}x${profile.height}")
+        emitState(PreviewUiState.STARTING, "Binding preview ${actualProfile.actualLabel}")
 
         try {
+            val manager = context.getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+            val characteristics = manager.getCameraCharacteristics(profile.cameraId)
             val previewBuilder = Preview.Builder()
-                .setTargetResolution(android.util.Size(profile.width, profile.height))
+                .setTargetResolution(android.util.Size(actualProfile.captureSize.width, actualProfile.captureSize.height))
                 .setTargetRotation(rotation)
             @Suppress("UnsafeOptInUsageError")
             Camera2Interop.Extender(previewBuilder).apply {
-                when (spec.mode) {
-                    CaptureModePreset.LATENCY -> {
-                        setCaptureRequestOption(android.hardware.camera2.CaptureRequest.NOISE_REDUCTION_MODE, android.hardware.camera2.CaptureRequest.NOISE_REDUCTION_MODE_FAST)
-                        setCaptureRequestOption(android.hardware.camera2.CaptureRequest.EDGE_MODE, android.hardware.camera2.CaptureRequest.EDGE_MODE_FAST)
-                    }
-                    CaptureModePreset.BALANCED -> {
-                        setCaptureRequestOption(android.hardware.camera2.CaptureRequest.NOISE_REDUCTION_MODE, android.hardware.camera2.CaptureRequest.NOISE_REDUCTION_MODE_FAST)
-                        setCaptureRequestOption(android.hardware.camera2.CaptureRequest.EDGE_MODE, android.hardware.camera2.CaptureRequest.EDGE_MODE_FAST)
-                    }
-                    CaptureModePreset.LOW_LIGHT -> {
-                        setCaptureRequestOption(android.hardware.camera2.CaptureRequest.NOISE_REDUCTION_MODE, android.hardware.camera2.CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
-                        setCaptureRequestOption(android.hardware.camera2.CaptureRequest.EDGE_MODE, android.hardware.camera2.CaptureRequest.EDGE_MODE_HIGH_QUALITY)
-                    }
+                setCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_MODE, actualProfile.tuning.controlMode)
+                setCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE, actualProfile.tuning.aeMode)
+                setCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, actualProfile.tuning.aeTargetFpsRange)
+                setCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_AF_MODE, android.hardware.camera2.CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                setCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_AWB_MODE, android.hardware.camera2.CaptureRequest.CONTROL_AWB_MODE_AUTO)
+                setCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, android.hardware.camera2.CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO)
+                setCaptureRequestOption(android.hardware.camera2.CaptureRequest.NOISE_REDUCTION_MODE, actualProfile.tuning.noiseReductionMode)
+                setCaptureRequestOption(android.hardware.camera2.CaptureRequest.EDGE_MODE, actualProfile.tuning.edgeMode)
+                actualProfile.tuning.sceneMode?.let {
+                    setCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_SCENE_MODE, it)
+                }
+                actualProfile.tuning.colorCorrectionAberrationMode?.let {
+                    setCaptureRequestOption(android.hardware.camera2.CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, it)
+                }
+                actualProfile.tuning.hotPixelMode?.let {
+                    setCaptureRequestOption(android.hardware.camera2.CaptureRequest.HOT_PIXEL_MODE, it)
+                }
+                actualProfile.tuning.shadingMode?.let {
+                    setCaptureRequestOption(android.hardware.camera2.CaptureRequest.SHADING_MODE, it)
+                }
+                actualProfile.tuning.tonemapMode?.let {
+                    setCaptureRequestOption(android.hardware.camera2.CaptureRequest.TONEMAP_MODE, it)
+                }
+                actualProfile.tuning.postRawSensitivityBoost?.let {
+                    setCaptureRequestOption(android.hardware.camera2.CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, it)
+                }
+                if (characteristics.get(android.hardware.camera2.CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
+                        ?.contains(android.hardware.camera2.CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON) == true) {
+                    setCaptureRequestOption(
+                        android.hardware.camera2.CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                        android.hardware.camera2.CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF,
+                    )
                 }
             }
             val preview = previewBuilder.build()
             preview.setSurfaceProvider(previewView.surfaceProvider)
 
             val viewPort = ViewPort.Builder(
-                Rational(profile.width, profile.height),
+                Rational(actualProfile.captureSize.width, actualProfile.captureSize.height),
                 rotation,
             )
                 .setScaleType(ViewPort.FILL_CENTER)
@@ -153,11 +175,14 @@ class PreviewController(
             activePreview = preview
             activeCamera = camera
             val boundCameraId = runCatching { Camera2CameraInfo.from(camera.cameraInfo).cameraId }.getOrNull()
-            camera.cameraControl.enableTorch(spec.torchEnabled && profile.supportsTorch)
+            camera.cameraControl.enableTorch(actualProfile.torchEnabled)
             val detail =
-                "Preview Ready ${profile.width}x${profile.height}@${profile.targetFps} camera=${boundCameraId ?: "default"}"
+                "Preview Ready ${actualProfile.actualLabel} camera=${boundCameraId ?: "default"}"
             emitState(PreviewUiState.READY, detail)
-            emitDebug("preview bound reason=$reason requested=${spec.displayLabel} resolved=${profile.width}x${profile.height} camera=${boundCameraId ?: "default"} torch=${spec.torchEnabled && profile.supportsTorch}")
+            emitDebug(
+                "preview bound reason=$reason requested=${spec.displayLabel} actual=${actualProfile.actualLabel} " +
+                    "camera=${boundCameraId ?: "default"} torch=${actualProfile.torchEnabled} session=${actualProfile.sessionMode}",
+            )
         } catch (t: Throwable) {
             activePreview = null
             activeCamera = null

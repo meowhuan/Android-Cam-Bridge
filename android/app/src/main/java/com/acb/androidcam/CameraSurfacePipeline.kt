@@ -7,6 +7,7 @@ import android.graphics.Matrix
 import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraConstrainedHighSpeedCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
@@ -29,22 +30,52 @@ class CameraSurfacePipeline(
     private val context: Context,
     private val onError: ((String) -> Unit)? = null,
 ) {
+    data class CaptureTuning(
+        val controlMode: Int,
+        val aeMode: Int,
+        val aeTargetFpsRange: Range<Int>,
+        val noiseReductionMode: Int,
+        val edgeMode: Int,
+        val colorCorrectionAberrationMode: Int? = null,
+        val hotPixelMode: Int? = null,
+        val shadingMode: Int? = null,
+        val tonemapMode: Int? = null,
+        val sceneMode: Int? = null,
+        val postRawSensitivityBoost: Int? = null,
+    )
+
+    data class CaptureProfile(
+        val selectedProfile: SupportedCaptureProfile,
+        val captureSize: Size,
+        val actualFpsRange: Range<Int>,
+        val mode: CaptureModePreset,
+        val torchEnabled: Boolean,
+        val sessionMode: CaptureDeliveryMode,
+        val tuning: CaptureTuning,
+    ) {
+        val actualLabel: String
+            get() = buildString {
+                append("${captureSize.width}x${captureSize.height}@")
+                if (actualFpsRange.lower == actualFpsRange.upper) {
+                    append(actualFpsRange.upper)
+                } else {
+                    append(actualFpsRange.lower)
+                    append('-')
+                    append(actualFpsRange.upper)
+                }
+                if (sessionMode == CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED) {
+                    append(" hs")
+                }
+                append(" (${mode.name.lowercase()})")
+            }
+
+        val cameraId: String
+            get() = selectedProfile.cameraId
+    }
+
     companion object {
         private const val TAG = "CameraSurfacePipeline"
-
-        data class CaptureProfile(
-            val selectedProfile: SupportedCaptureProfile,
-            val captureSize: Size,
-            val actualFpsRange: Range<Int>,
-            val mode: CaptureModePreset,
-            val torchEnabled: Boolean,
-        ) {
-            val cameraId: String
-                get() = selectedProfile.cameraId
-
-            val actualLabel: String
-                get() = "${captureSize.width}x${captureSize.height}@${actualFpsRange.upper} (${mode.name.lowercase()})"
-        }
+        private const val NS_PER_SECOND = 1_000_000_000.0
 
         fun enumerateSupportedProfiles(context: Context): List<SupportedCaptureProfile> {
             return try {
@@ -61,39 +92,65 @@ class CameraSurfacePipeline(
                     Size(1280, 720),
                     Size(1920, 1080),
                 )
-                val supportedFps = chooseSupportedFpsTargets(characteristics)
                 val profiles = mutableListOf<SupportedCaptureProfile>()
                 for (requested in exactSizes) {
                     val matchedSize = chooseBestSize(recorderSizes, requested.width, requested.height)
                     if (matchedSize.width != requested.width || matchedSize.height != requested.height) {
                         continue
                     }
-                    for (fps in supportedFps) {
-                        val id = "${cameraId}_${matchedSize.width}x${matchedSize.height}_${fps}"
+                    val supportsRegular30 = supportsRegularTargetFps(map, characteristics, matchedSize, 30)
+                    val supportsRegular60 = supportsRegularTargetFps(map, characteristics, matchedSize, 60)
+                    val supportsHighSpeed60 = supportsHighSpeedTargetFps(map, matchedSize, 60)
+                    if (supportsRegular30) {
+                        val id = "${cameraId}_${matchedSize.width}x${matchedSize.height}_30_std"
                         profiles += SupportedCaptureProfile(
                             id = id,
                             cameraId = cameraId,
                             width = matchedSize.width,
                             height = matchedSize.height,
-                            targetFps = fps,
-                            recommendedBitrate = recommendedBitrate(matchedSize.width, matchedSize.height, fps),
+                            targetFps = 30,
+                            recommendedBitrate = recommendedBitrate(matchedSize.width, matchedSize.height, 30),
                             supportsTorch = flashAvailable,
+                            deliveryMode = CaptureDeliveryMode.STANDARD,
+                        )
+                    }
+                    if (supportsHighSpeed60 || supportsRegular60) {
+                        val deliveryMode = if (supportsHighSpeed60) {
+                            CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED
+                        } else {
+                            CaptureDeliveryMode.STANDARD
+                        }
+                        val id = "${cameraId}_${matchedSize.width}x${matchedSize.height}_60_${deliveryMode.name.lowercase()}"
+                        profiles += SupportedCaptureProfile(
+                            id = id,
+                            cameraId = cameraId,
+                            width = matchedSize.width,
+                            height = matchedSize.height,
+                            targetFps = 60,
+                            recommendedBitrate = recommendedBitrate(matchedSize.width, matchedSize.height, 60),
+                            supportsTorch = flashAvailable,
+                            deliveryMode = deliveryMode,
                         )
                     }
                 }
                 if (profiles.isEmpty()) {
                     val fallback = chooseBestSize(recorderSizes, 1280, 720)
                     profiles += SupportedCaptureProfile(
-                        id = "${cameraId}_${fallback.width}x${fallback.height}_30",
+                        id = "${cameraId}_${fallback.width}x${fallback.height}_30_std",
                         cameraId = cameraId,
                         width = fallback.width,
                         height = fallback.height,
-                        targetFps = minOf(30, supportedFps.maxOrNull() ?: 30),
-                        recommendedBitrate = recommendedBitrate(fallback.width, fallback.height, minOf(30, supportedFps.maxOrNull() ?: 30)),
+                        targetFps = 30,
+                        recommendedBitrate = recommendedBitrate(fallback.width, fallback.height, 30),
                         supportsTorch = flashAvailable,
+                        deliveryMode = CaptureDeliveryMode.STANDARD,
                     )
                 }
-                profiles
+                profiles.sortedWith(
+                    compareBy<SupportedCaptureProfile> { it.width * it.height }
+                        .thenBy { it.targetFps }
+                        .thenBy { it.deliveryMode.ordinal }
+                )
             } catch (t: Throwable) {
                 AppLog.w(TAG, "enumerateSupportedProfiles failed: ${t.message}", t)
                 emptyList()
@@ -125,22 +182,99 @@ class CameraSurfacePipeline(
         fun prepareCaptureProfile(context: Context, spec: CaptureSpec): CaptureProfile {
             val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val characteristics = manager.getCameraCharacteristics(spec.profile.cameraId)
-            val actualRange = chooseCaptureRange(characteristics, spec.profile.targetFps, spec.mode)
+            val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val captureSize = Size(spec.profile.width, spec.profile.height)
+            val sessionMode = chooseSessionMode(spec.profile, spec.mode, map, captureSize)
+            val actualRange = if (sessionMode == CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED && map != null) {
+                chooseHighSpeedRange(map, captureSize, spec.profile.targetFps)
+            } else {
+                chooseCaptureRange(characteristics, spec.profile.targetFps, spec.mode)
+            }
+            val tuning = buildCaptureTuning(characteristics, spec.mode, actualRange, sessionMode)
             return CaptureProfile(
                 selectedProfile = spec.profile,
-                captureSize = Size(spec.profile.width, spec.profile.height),
+                captureSize = captureSize,
                 actualFpsRange = actualRange,
                 mode = spec.mode,
-                torchEnabled = spec.torchEnabled && spec.profile.supportsTorch,
+                torchEnabled = spec.torchEnabled && spec.profile.supportsTorch && sessionMode != CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED,
+                sessionMode = sessionMode,
+                tuning = tuning,
             )
         }
 
-        private fun chooseSupportedFpsTargets(characteristics: CameraCharacteristics): List<Int> {
+        private fun supportsRegularTargetFps(
+            map: StreamConfigurationMap,
+            characteristics: CameraCharacteristics,
+            size: Size,
+            targetFps: Int,
+        ): Boolean {
             val ranges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
-            val out = mutableListOf<Int>()
-            if (ranges.any { it.upper >= 30 }) out += 30
-            if (ranges.any { it.upper >= 60 }) out += 60
-            return if (out.isEmpty()) listOf(30) else out
+            if (ranges.none { it.upper >= targetFps }) {
+                return false
+            }
+            if (targetFps <= 30) {
+                return true
+            }
+            val minDurationNs = outputMinFrameDurationNs(map, size) ?: return false
+            if (minDurationNs <= 0L) {
+                return false
+            }
+            val maxSupportedFps = NS_PER_SECOND / minDurationNs.toDouble()
+            return maxSupportedFps + 0.5 >= targetFps
+        }
+
+        private fun outputMinFrameDurationNs(map: StreamConfigurationMap, size: Size): Long? {
+            val recorderDuration = runCatching { map.getOutputMinFrameDuration(MediaRecorder::class.java, size) }.getOrNull()
+            if (recorderDuration != null && recorderDuration > 0L) {
+                return recorderDuration
+            }
+            val textureDuration = runCatching { map.getOutputMinFrameDuration(SurfaceTexture::class.java, size) }.getOrNull()
+            return textureDuration?.takeIf { it > 0L }
+        }
+
+        private fun supportsHighSpeedTargetFps(
+            map: StreamConfigurationMap,
+            size: Size,
+            targetFps: Int,
+        ): Boolean {
+            val supportsSize = runCatching { map.highSpeedVideoSizes.any { it == size } }.getOrDefault(false)
+            if (!supportsSize) {
+                return false
+            }
+            val ranges = runCatching { map.getHighSpeedVideoFpsRangesFor(size).toList() }.getOrDefault(emptyList())
+            return ranges.any { targetFps in it.lower..it.upper }
+        }
+
+        private fun chooseSessionMode(
+            profile: SupportedCaptureProfile,
+            mode: CaptureModePreset,
+            map: StreamConfigurationMap?,
+            size: Size,
+        ): CaptureDeliveryMode {
+            if (mode == CaptureModePreset.LOW_LIGHT || map == null) {
+                return CaptureDeliveryMode.STANDARD
+            }
+            return if (profile.deliveryMode == CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED &&
+                supportsHighSpeedTargetFps(map, size, profile.targetFps)
+            ) {
+                CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED
+            } else {
+                CaptureDeliveryMode.STANDARD
+            }
+        }
+
+        private fun chooseHighSpeedRange(
+            map: StreamConfigurationMap,
+            size: Size,
+            targetFps: Int,
+        ): Range<Int> {
+            val candidates = runCatching { map.getHighSpeedVideoFpsRangesFor(size).toList() }.getOrDefault(emptyList())
+                .filter { targetFps in it.lower..it.upper }
+            return candidates.minWithOrNull(
+                compareBy<Range<Int>> { if (it.lower == it.upper) 0 else 1 }
+                    .thenBy { abs(it.upper - targetFps) }
+                    .thenBy { abs(it.lower - targetFps) }
+            ) ?: Range(targetFps, targetFps)
         }
 
         private fun chooseCaptureRange(
@@ -161,11 +295,73 @@ class CameraSurfacePipeline(
                     ?: ranges.maxByOrNull { it.upper }!!
                 CaptureModePreset.LOW_LIGHT -> {
                     val capped = minOf(targetFps, 30)
-                    ranges
-                        .filter { it.upper >= capped }
-                        .minWithOrNull(compareBy<Range<Int>> { abs(it.upper - capped) }.thenBy { it.lower })
+                    val preferred = ranges
+                        .filter { it.upper <= capped }
+                        .minWithOrNull(compareByDescending<Range<Int>> { it.upper }.thenBy { it.lower })
+                    preferred
+                        ?: ranges
+                            .filter { it.upper >= capped }
+                            .minWithOrNull(compareBy<Range<Int>> { abs(it.upper - capped) }.thenBy { it.lower })
                         ?: ranges.minByOrNull { it.lower }!!
                 }
+            }
+        }
+
+        private fun buildCaptureTuning(
+            characteristics: CameraCharacteristics,
+            mode: CaptureModePreset,
+            actualFpsRange: Range<Int>,
+            sessionMode: CaptureDeliveryMode,
+        ): CaptureTuning {
+            if (sessionMode == CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED) {
+                return CaptureTuning(
+                    controlMode = CaptureRequest.CONTROL_MODE_AUTO,
+                    aeMode = CaptureRequest.CONTROL_AE_MODE_ON,
+                    aeTargetFpsRange = actualFpsRange,
+                    noiseReductionMode = CaptureRequest.NOISE_REDUCTION_MODE_FAST,
+                    edgeMode = CaptureRequest.EDGE_MODE_FAST,
+                )
+            }
+
+            val nightSceneSupported = characteristics.get(CameraCharacteristics.CONTROL_AVAILABLE_SCENE_MODES)
+                ?.contains(CaptureRequest.CONTROL_SCENE_MODE_NIGHT) == true
+            val postRawBoost = characteristics.get(CameraCharacteristics.CONTROL_POST_RAW_SENSITIVITY_BOOST_RANGE)
+                ?.upper
+                ?.takeIf { it > 100 }
+
+            return when (mode) {
+                CaptureModePreset.LATENCY -> CaptureTuning(
+                    controlMode = CaptureRequest.CONTROL_MODE_AUTO,
+                    aeMode = CaptureRequest.CONTROL_AE_MODE_ON,
+                    aeTargetFpsRange = actualFpsRange,
+                    noiseReductionMode = CaptureRequest.NOISE_REDUCTION_MODE_FAST,
+                    edgeMode = CaptureRequest.EDGE_MODE_FAST,
+                )
+                CaptureModePreset.BALANCED -> CaptureTuning(
+                    controlMode = CaptureRequest.CONTROL_MODE_AUTO,
+                    aeMode = CaptureRequest.CONTROL_AE_MODE_ON,
+                    aeTargetFpsRange = actualFpsRange,
+                    noiseReductionMode = CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY,
+                    edgeMode = CaptureRequest.EDGE_MODE_HIGH_QUALITY,
+                    colorCorrectionAberrationMode = CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY,
+                )
+                CaptureModePreset.LOW_LIGHT -> CaptureTuning(
+                    controlMode = if (nightSceneSupported) {
+                        CaptureRequest.CONTROL_MODE_USE_SCENE_MODE
+                    } else {
+                        CaptureRequest.CONTROL_MODE_AUTO
+                    },
+                    aeMode = CaptureRequest.CONTROL_AE_MODE_ON,
+                    aeTargetFpsRange = actualFpsRange,
+                    noiseReductionMode = CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY,
+                    edgeMode = CaptureRequest.EDGE_MODE_HIGH_QUALITY,
+                    colorCorrectionAberrationMode = CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY,
+                    hotPixelMode = CaptureRequest.HOT_PIXEL_MODE_HIGH_QUALITY,
+                    shadingMode = CaptureRequest.SHADING_MODE_HIGH_QUALITY,
+                    tonemapMode = CaptureRequest.TONEMAP_MODE_HIGH_QUALITY,
+                    sceneMode = if (nightSceneSupported) CaptureRequest.CONTROL_SCENE_MODE_NIGHT else null,
+                    postRawSensitivityBoost = postRawBoost,
+                )
             }
         }
 
@@ -210,9 +406,9 @@ class CameraSurfacePipeline(
         }
 
         private fun recommendedBitrate(width: Int, height: Int, fps: Int): Int = when {
-            width >= 1920 -> if (fps >= 60) 12_000_000 else 8_000_000
-            width >= 1280 -> if (fps >= 60) 7_000_000 else 4_500_000
-            else -> if (fps >= 60) 3_500_000 else 2_000_000
+            width >= 1920 -> if (fps >= 60) 18_000_000 else 12_000_000
+            width >= 1280 -> if (fps >= 60) 12_000_000 else 7_000_000
+            else -> if (fps >= 60) 5_000_000 else 3_000_000
         }
     }
 
@@ -393,7 +589,14 @@ class CameraSurfacePipeline(
                 }
             }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            if (config.profile.sessionMode == CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED) {
+                @Suppress("DEPRECATION")
+                device.createConstrainedHighSpeedCaptureSession(
+                    surfaces,
+                    callback,
+                    handler,
+                )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val outputs = surfaces.map { OutputConfiguration(it) }
                 val sessionConfig = SessionConfiguration(
                     SessionConfiguration.SESSION_REGULAR,
@@ -420,29 +623,28 @@ class CameraSurfacePipeline(
         try {
             val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val characteristics = manager.getCameraCharacteristics(config.profile.cameraId)
-            val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+            val requestBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(config.encoderSurface)
                 previewSurface?.let { addTarget(it) }
                 set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
-                set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                set(CaptureRequest.CONTROL_MODE, config.profile.tuning.controlMode)
+                set(CaptureRequest.CONTROL_AE_MODE, config.profile.tuning.aeMode)
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
                 set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
-                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, config.profile.actualFpsRange)
-                when (config.profile.mode) {
-                    CaptureModePreset.LATENCY -> {
-                        set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
-                        set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
-                    }
-                    CaptureModePreset.BALANCED -> {
-                        set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
-                        set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
-                    }
-                    CaptureModePreset.LOW_LIGHT -> {
-                        set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
-                        set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
-                    }
+                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, config.profile.tuning.aeTargetFpsRange)
+                set(CaptureRequest.NOISE_REDUCTION_MODE, config.profile.tuning.noiseReductionMode)
+                set(CaptureRequest.EDGE_MODE, config.profile.tuning.edgeMode)
+                config.profile.tuning.sceneMode?.let { set(CaptureRequest.CONTROL_SCENE_MODE, it) }
+                config.profile.tuning.colorCorrectionAberrationMode?.let {
+                    set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, it)
                 }
+                config.profile.tuning.hotPixelMode?.let { set(CaptureRequest.HOT_PIXEL_MODE, it) }
+                config.profile.tuning.shadingMode?.let { set(CaptureRequest.SHADING_MODE, it) }
+                config.profile.tuning.tonemapMode?.let { set(CaptureRequest.TONEMAP_MODE, it) }
+                config.profile.tuning.postRawSensitivityBoost?.let {
+                    set(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, it)
+                }
+                set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO)
                 if (config.profile.torchEnabled && characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true) {
                     set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
                 } else {
@@ -452,11 +654,19 @@ class CameraSurfacePipeline(
                         ?.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON) == true) {
                     set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
                 }
-            }.build()
-            session.setRepeatingRequest(request, null, cameraHandler)
+            }
+            val request = requestBuilder.build()
+            if (config.profile.sessionMode == CaptureDeliveryMode.CONSTRAINED_HIGH_SPEED) {
+                val highSpeedSession = session as? CameraConstrainedHighSpeedCaptureSession
+                    ?: error("high-speed session unavailable")
+                val burst = highSpeedSession.createHighSpeedRequestList(request)
+                highSpeedSession.setRepeatingBurst(burst, null, cameraHandler)
+            } else {
+                session.setRepeatingRequest(request, null, cameraHandler)
+            }
             AppLog.i(
                 TAG,
-                "capture repeating started actual=${config.profile.actualLabel} torch=${config.profile.torchEnabled}",
+                "capture repeating started actual=${config.profile.actualLabel} torch=${config.profile.torchEnabled} session=${config.profile.sessionMode}",
             )
         } catch (t: Throwable) {
             AppLog.e(TAG, "startRepeating failed: ${t.message}", t)
@@ -482,28 +692,42 @@ class CameraSurfacePipeline(
                 val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
                 val characteristics = manager.getCameraCharacteristics(cameraId)
                 val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+                val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
+                    ?: CameraCharacteristics.LENS_FACING_BACK
                 val displayRotation = textureView.display?.rotation ?: Surface.ROTATION_0
-                val relativeRotation = computeRelativeRotation(sensorOrientation, displayRotation)
+                val relativeRotation = computeRelativeRotation(sensorOrientation, displayRotation, lensFacing)
+                val bufferWidth = if (relativeRotation % 180 == 0) {
+                    config.profile.captureSize.width.toFloat()
+                } else {
+                    config.profile.captureSize.height.toFloat()
+                }
+                val bufferHeight = if (relativeRotation % 180 == 0) {
+                    config.profile.captureSize.height.toFloat()
+                } else {
+                    config.profile.captureSize.width.toFloat()
+                }
 
                 val matrix = Matrix()
                 val viewRect = RectF(0f, 0f, textureView.width.toFloat(), textureView.height.toFloat())
-                val bufferRect = RectF(0f, 0f, config.profile.captureSize.width.toFloat(), config.profile.captureSize.height.toFloat())
-
-                matrix.postTranslate(-bufferRect.centerX(), -bufferRect.centerY())
-                matrix.postRotate(relativeRotation.toFloat())
-
-                val rotatedRect = RectF(bufferRect)
-                matrix.mapRect(rotatedRect)
-                val scale = maxOf(
-                    viewRect.width() / rotatedRect.width(),
-                    viewRect.height() / rotatedRect.height(),
+                val centerX = viewRect.centerX()
+                val centerY = viewRect.centerY()
+                val bufferRect = RectF(
+                    centerX - bufferWidth / 2f,
+                    centerY - bufferHeight / 2f,
+                    centerX + bufferWidth / 2f,
+                    centerY + bufferHeight / 2f,
                 )
-                matrix.postScale(scale, scale)
-                matrix.postTranslate(viewRect.centerX(), viewRect.centerY())
+                matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
+                val scale = maxOf(
+                    viewRect.width() / bufferWidth,
+                    viewRect.height() / bufferHeight,
+                )
+                matrix.postScale(scale, scale, centerX, centerY)
+                matrix.postRotate(-relativeRotation.toFloat(), centerX, centerY)
                 textureView.setTransform(matrix)
                 AppLog.d(
                     TAG,
-                    "stream preview transform rotation=$relativeRotation view=${textureView.width}x${textureView.height} buffer=${config.profile.captureSize.width}x${config.profile.captureSize.height}",
+                    "stream preview transform rotation=$relativeRotation view=${textureView.width}x${textureView.height} buffer=${config.profile.captureSize.width}x${config.profile.captureSize.height} session=${config.profile.sessionMode}",
                 )
             } catch (t: Throwable) {
                 AppLog.w(TAG, "updatePreviewTransform failed: ${t.message}", t)
@@ -511,14 +735,15 @@ class CameraSurfacePipeline(
         }
     }
 
-    private fun computeRelativeRotation(sensorOrientation: Int, displayRotation: Int): Int {
+    private fun computeRelativeRotation(sensorOrientation: Int, displayRotation: Int, lensFacing: Int): Int {
         val displayDegrees = when (displayRotation) {
             Surface.ROTATION_90 -> 90
             Surface.ROTATION_180 -> 180
             Surface.ROTATION_270 -> 270
             else -> 0
         }
-        return (sensorOrientation - displayDegrees + 360) % 360
+        val sign = if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) -1 else 1
+        return (sensorOrientation - displayDegrees * sign + 360) % 360
     }
 
     private fun closeSessionLocked() {

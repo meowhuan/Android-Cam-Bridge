@@ -299,7 +299,7 @@ void VirtualCamPin::BuildMediaType(AM_MEDIA_TYPE* pmt, int width, int height) {
     vih->bmiHeader.biBitCount = 32;
     vih->bmiHeader.biCompression = BI_RGB;
     vih->bmiHeader.biSizeImage = width * height * 4;
-    vih->AvgTimePerFrame = 333333; // 30fps in 100ns units
+    vih->AvgTimePerFrame = 166666; // 60fps in 100ns units
     // rcSource and rcTarget left as zero (entire frame)
 }
 
@@ -637,10 +637,10 @@ STDMETHODIMP VirtualCamPin::GetStreamCaps(int iIndex, AM_MEDIA_TYPE** ppmt, BYTE
     caps->StretchTapsY = 0;
     caps->ShrinkTapsX = 0;
     caps->ShrinkTapsY = 0;
-    caps->MinFrameInterval = 333333;   // 30fps
+    caps->MinFrameInterval = 166666;   // 60fps
     caps->MaxFrameInterval = 10000000; // 1fps
     caps->MinBitsPerSecond = static_cast<LONG>((std::min)(static_cast<int64_t>(w) * h * 4 * 8 * 1, static_cast<int64_t>(LONG_MAX)));
-    caps->MaxBitsPerSecond = static_cast<LONG>((std::min)(static_cast<int64_t>(w) * h * 4 * 8 * 30, static_cast<int64_t>(LONG_MAX)));
+    caps->MaxBitsPerSecond = static_cast<LONG>((std::min)(static_cast<int64_t>(w) * h * 4 * 8 * 60, static_cast<int64_t>(LONG_MAX)));
 
     return S_OK;
 }
@@ -779,7 +779,7 @@ void VirtualCamPin::ThreadProc() {
     Commit();
 
     REFERENCE_TIME frameNumber = 0;
-    const REFERENCE_TIME frameDuration = 333333; // 30fps in 100ns units
+    const REFERENCE_TIME frameDuration = 166666; // 60fps in 100ns units
     bool firstFrame = true;
     bool hasValidFrame = false;
     uint32_t lastValidW = 0, lastValidH = 0;
@@ -794,7 +794,7 @@ void VirtualCamPin::ThreadProc() {
         LeaveCriticalSection(&cs_);
 
         if (!inputPin) {
-            WaitForSingleObject(stopEvent_, 33);
+            WaitForSingleObject(stopEvent_, 16);
             continue;
         }
 
@@ -815,7 +815,7 @@ void VirtualCamPin::ThreadProc() {
         HRESULT hr = GetBuffer(&sample, nullptr, nullptr, 0);
         if (FAILED(hr) || !sample) {
             inputPin->Release();
-            WaitForSingleObject(stopEvent_, 33);
+            WaitForSingleObject(stopEvent_, 16);
             continue;
         }
 
@@ -863,8 +863,8 @@ void VirtualCamPin::ThreadProc() {
 
         ++frameNumber;
 
-        // Poll at ~30fps matching AvgTimePerFrame=333333 (30fps)
-        if (WaitForSingleObject(stopEvent_, 33) == WAIT_OBJECT_0) {
+        // Poll at ~60fps matching AvgTimePerFrame=166666 (60fps)
+        if (WaitForSingleObject(stopEvent_, 16) == WAIT_OBJECT_0) {
             break;
         }
     }

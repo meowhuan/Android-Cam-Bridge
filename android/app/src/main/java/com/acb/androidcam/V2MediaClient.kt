@@ -72,7 +72,19 @@ class V2MediaClient(
         val authToken: String,
     )
 
-    fun startSession(receiverAddress: String, transport: String): SessionInfo? {
+    fun startSession(
+        receiverAddress: String,
+        transport: String,
+        videoWidth: Int,
+        videoHeight: Int,
+        videoFps: Int,
+        videoBitrate: Int,
+        videoKeyInt: Int,
+        audioEnabled: Boolean,
+        audioSampleRate: Int,
+        audioChannels: Int,
+        audioBitrate: Int,
+    ): SessionInfo? {
         this.activeTransport = transport
         val initial = normalizeReceiverAddress(receiverAddress)
         this.receiverAddress = initial
@@ -83,7 +95,19 @@ class V2MediaClient(
             return SessionInfo("usb-aoa-direct", "", "")
         }
 
-        val first = startSessionOnce(initial, transport)
+        val first = startSessionOnce(
+            targetAddress = initial,
+            transport = transport,
+            videoWidth = videoWidth,
+            videoHeight = videoHeight,
+            videoFps = videoFps,
+            videoBitrate = videoBitrate,
+            videoKeyInt = videoKeyInt,
+            audioEnabled = audioEnabled,
+            audioSampleRate = audioSampleRate,
+            audioChannels = audioChannels,
+            audioBitrate = audioBitrate,
+        )
         if (first != null) return first
 
         if (transport != "usb-native") {
@@ -94,7 +118,19 @@ class V2MediaClient(
         emit("usb-native scanning candidates=${candidates.size} (192.168.x.x)")
         val reachable = findReachableReceiver(candidates.filter { it != initial })
         if (reachable != null) {
-            val s = startSessionOnce(reachable, transport)
+            val s = startSessionOnce(
+                targetAddress = reachable,
+                transport = transport,
+                videoWidth = videoWidth,
+                videoHeight = videoHeight,
+                videoFps = videoFps,
+                videoBitrate = videoBitrate,
+                videoKeyInt = videoKeyInt,
+                audioEnabled = audioEnabled,
+                audioSampleRate = audioSampleRate,
+                audioChannels = audioChannels,
+                audioBitrate = audioBitrate,
+            )
             if (s != null) {
                 this.receiverAddress = reachable
                 emit("usb-native receiver auto-detected: $reachable")
@@ -104,13 +140,42 @@ class V2MediaClient(
         return null
     }
 
-    private fun startSessionOnce(targetAddress: String, transport: String): SessionInfo? {
+    private fun startSessionOnce(
+        targetAddress: String,
+        transport: String,
+        videoWidth: Int,
+        videoHeight: Int,
+        videoFps: Int,
+        videoBitrate: Int,
+        videoKeyInt: Int,
+        audioEnabled: Boolean,
+        audioSampleRate: Int,
+        audioChannels: Int,
+        audioBitrate: Int,
+    ): SessionInfo? {
         return try {
             val body = JSONObject()
                 .put("transport", transport)
                 .put("mode", "obs_direct")
-                .put("video", JSONObject().put("codec", "h264"))
-                .put("audio", JSONObject().put("codec", "aac").put("enabled", true))
+                .put(
+                    "video",
+                    JSONObject()
+                        .put("codec", "h264")
+                        .put("width", videoWidth)
+                        .put("height", videoHeight)
+                        .put("fps", videoFps)
+                        .put("bitrate", videoBitrate)
+                        .put("keyint", videoKeyInt),
+                )
+                .put(
+                    "audio",
+                    JSONObject()
+                        .put("codec", "aac")
+                        .put("enabled", audioEnabled)
+                        .put("sampleRate", audioSampleRate)
+                        .put("channels", audioChannels)
+                        .put("bitrate", audioBitrate),
+                )
                 .toString()
 
             val req = Request.Builder()

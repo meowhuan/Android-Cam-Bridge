@@ -481,7 +481,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateActualProfileText(spec: CaptureSpec) {
-        updateActualProfileText(spec.profile.displayLabel, spec.mode, spec.torchEnabled)
+        val actualProfile = runCatching { CameraSurfacePipeline.prepareCaptureProfile(this, spec) }.getOrNull()
+        if (actualProfile != null) {
+            updateActualProfileText(actualProfile.actualLabel, spec.mode, actualProfile.torchEnabled)
+        } else {
+            updateActualProfileText(spec.profile.displayLabel, spec.mode, spec.torchEnabled)
+        }
     }
 
     private fun updateActualProfileText(profileLabel: String, mode: CaptureModePreset, torchEnabled: Boolean) {

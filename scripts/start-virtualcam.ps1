@@ -4,7 +4,7 @@ param(
   [int]$IntervalMs = 20,
   [string]$Python = "python",
   [string]$Device = "",
-  [int]$Fps = 30,
+  [int]$Fps = 60,
   [switch]$Foreground
 )
 
