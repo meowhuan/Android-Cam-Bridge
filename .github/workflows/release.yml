@@ -322,11 +322,27 @@ jobs:
           path: dist/release-assets/**
           if-no-files-found: error
 
+      - name: Resolve release channel
+        id: release_channel
+        shell: pwsh
+        run: |
+          $isPrerelease = $false
+          if ("${{ github.ref_type }}" -ne "tag") {
+            $refName = "${{ github.ref_name }}"
+            if ($refName -eq "dev" -or $refName.StartsWith("dev/")) {
+              $isPrerelease = $true
+            }
+          }
+          "prerelease=$($isPrerelease.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "GitHub Release prerelease=$isPrerelease ref=${{ github.ref_name }}"
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.value }}
           name: ACB v${{ steps.version.outputs.value }}
+          prerelease: ${{ steps.release_channel.outputs.prerelease }}
+          make_latest: ${{ steps.release_channel.outputs.prerelease == 'true' && 'false' || 'true' }}
           generate_release_notes: true
           files: |
             dist/release-assets/ACB-Setup-${{ steps.version.outputs.value }}.exe
@@ -334,7 +350,6 @@ jobs:
             dist/release-assets/ACB-Android-${{ steps.version.outputs.value }}.apk
             dist/release-assets/SHA256SUMS.txt
             dist/release-assets/*.asc
-
 
 
 
