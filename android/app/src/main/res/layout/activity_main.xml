@@ -3,154 +3,278 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="#0B1020"
     tools:context=".MainActivity">
 
-    <TextureView
-        android:id="@+id/previewView"
+    <LinearLayout
+        android:id="@+id/contentRoot"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#111111" />
+        android:orientation="vertical">
 
-    <Button
-        android:id="@+id/toggleUiButton"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top|end"
-        android:layout_margin="12dp"
-        android:minWidth="0dp"
-        android:paddingLeft="10dp"
-        android:paddingTop="6dp"
-        android:paddingRight="10dp"
-        android:paddingBottom="6dp"
-        android:text="@string/btn_hide_controls"
-        android:textAllCaps="false" />
-
-    <LinearLayout
-        android:id="@+id/controlsPanel"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom"
-        android:background="#B3000000"
-        android:orientation="vertical"
-        android:padding="10dp">
-
-        <TextView
-            android:id="@+id/statusText"
+        <FrameLayout
+            android:id="@+id/previewStage"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/status_idle"
-            android:textColor="#FFFFFF"
-            android:textSize="13sp" />
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:background="#05070A">
 
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:orientation="horizontal">
+            <androidx.camera.view.PreviewView
+                android:id="@+id/previewView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="#05070A" />
 
-            <Spinner
-                android:id="@+id/transportSpinner"
-                android:layout_width="0dp"
+            <TextureView
+                android:id="@+id/streamPreviewView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_weight="1" />
+                android:layout_gravity="top|start"
+                android:layout_margin="16dp"
+                android:orientation="vertical">
 
-            <Spinner
-                android:id="@+id/resolutionSpinner"
-                android:layout_width="0dp"
+                <TextView
+                    android:id="@+id/previewStateText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="#B3141C2D"
+                    android:paddingLeft="12dp"
+                    android:paddingTop="8dp"
+                    android:paddingRight="12dp"
+                    android:paddingBottom="8dp"
+                    android:text="@string/preview_state_idle"
+                    android:textColor="#FFFFFF"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/streamStateText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="#B3182640"
+                    android:paddingLeft="12dp"
+                    android:paddingTop="8dp"
+                    android:paddingRight="12dp"
+                    android:paddingBottom="8dp"
+                    android:text="@string/stream_state_idle"
+                    android:textColor="#FFFFFF"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/previewDetailText"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="6dp"
-                android:layout_weight="1" />
+                android:layout_gravity="bottom|start"
+                android:layout_marginLeft="16dp"
+                android:layout_marginRight="16dp"
+                android:layout_marginBottom="16dp"
+                android:background="#8C000000"
+                android:paddingLeft="12dp"
+                android:paddingTop="10dp"
+                android:paddingRight="12dp"
+                android:paddingBottom="10dp"
+                android:text="@string/preview_hint_default"
+                android:textColor="#F8FAFC"
+                android:textSize="13sp" />
 
             <Button
-                android:id="@+id/orientationButton"
+                android:id="@+id/toggleUiButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="6dp"
-                android:text="@string/btn_orientation_landscape_off"
-                android:textAllCaps="false" />
-        </LinearLayout>
-
-        <EditText
-            android:id="@+id/hostInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:hint="@string/hint_receiver_addr"
-            android:inputType="text"
-            android:singleLine="true" />
-
-        <Spinner
-            android:id="@+id/fpsSpinner"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:orientation="horizontal">
-
-            <CheckBox
-                android:id="@+id/micCheckbox"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/label_push_mic"
+                android:layout_gravity="top|end"
+                android:layout_margin="16dp"
+                android:backgroundTint="#D35B3FD4"
+                android:minWidth="0dp"
+                android:paddingLeft="14dp"
+                android:paddingTop="8dp"
+                android:paddingRight="14dp"
+                android:paddingBottom="8dp"
+                android:text="@string/btn_hide_controls"
+                android:textAllCaps="false"
                 android:textColor="#FFFFFF" />
+        </FrameLayout>
 
-            <CheckBox
-                android:id="@+id/sleepProtectionCheckbox"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:text="@string/label_sleep_protection"
-                android:textColor="#FFFFFF" />
-
-            <CheckBox
-                android:id="@+id/backgroundStreamingCheckbox"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:text="@string/label_background_streaming"
-                android:textColor="#FFFFFF" />
-        </LinearLayout>
-
-        <LinearLayout
+        <ScrollView
+            android:id="@+id/controlsPanel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:background="#F4131A2A"
+            android:fillViewport="true"
+            android:overScrollMode="never">
 
-            <CheckBox
-                android:id="@+id/debugModeCheckbox"
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="@string/label_debug_mode"
-                android:textColor="#FFFFFF" />
-        </LinearLayout>
+                android:orientation="vertical"
+                android:padding="16dp">
 
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:orientation="horizontal">
+                <TextView
+                    android:id="@+id/panelTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/controls_title"
+                    android:textColor="#FFFFFF"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
 
-            <Button
-                android:id="@+id/startButton"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/btn_start_stream" />
+                <TextView
+                    android:id="@+id/statusText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/stream_detail_default"
+                    android:textColor="#C7D2FE"
+                    android:textSize="13sp" />
 
-            <Button
-                android:id="@+id/stopButton"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="6dp"
-                android:layout_weight="1"
-                android:text="@string/btn_stop_stream" />
-        </LinearLayout>
+                <TextView
+                    android:id="@+id/actualProfileText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/actual_profile_default"
+                    android:textColor="#94A3B8"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/label_transport_mode"
+                    android:textColor="#E2E8F0"
+                    android:textStyle="bold" />
+
+                <Spinner
+                    android:id="@+id/transportSpinner"
+                    style="@style/Widget.Acb.Spinner"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/label_capture_profile"
+                    android:textColor="#E2E8F0"
+                    android:textStyle="bold" />
+
+                <Spinner
+                    android:id="@+id/captureProfileSpinner"
+                    style="@style/Widget.Acb.Spinner"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/label_capture_mode"
+                    android:textColor="#E2E8F0"
+                    android:textStyle="bold" />
+
+                <Spinner
+                    android:id="@+id/captureModeSpinner"
+                    style="@style/Widget.Acb.Spinner"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/label_receiver"
+                    android:textColor="#E2E8F0"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/hostInput"
+                    style="@style/Widget.Acb.EditText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:hint="@string/hint_receiver_addr"
+                    android:inputType="text"
+                    android:singleLine="true" />
+
+                <Button
+                    android:id="@+id/orientationButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/btn_orientation_landscape_off"
+                    android:textAllCaps="false" />
+
+                <CheckBox
+                    android:id="@+id/micCheckbox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/label_push_mic"
+                    android:textColor="#FFFFFF" />
+
+                <CheckBox
+                    android:id="@+id/sleepProtectionCheckbox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/label_sleep_protection"
+                    android:textColor="#FFFFFF" />
+
+                <CheckBox
+                    android:id="@+id/backgroundStreamingCheckbox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/label_background_streaming"
+                    android:textColor="#FFFFFF" />
+
+                <CheckBox
+                    android:id="@+id/debugModeCheckbox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/label_debug_mode"
+                    android:textColor="#FFFFFF" />
+
+                <CheckBox
+                    android:id="@+id/torchCheckbox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/label_torch"
+                    android:textColor="#FFFFFF" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/startButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:backgroundTint="#5B3FD4"
+                        android:text="@string/btn_start_stream"
+                        android:textColor="#FFFFFF" />
+
+                    <Button
+                        android:id="@+id/stopButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:backgroundTint="#394155"
+                        android:text="@string/btn_stop_stream"
+                        android:textColor="#FFFFFF" />
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
     </LinearLayout>
 
     <LinearLayout

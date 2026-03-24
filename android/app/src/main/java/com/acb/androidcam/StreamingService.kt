@@ -32,6 +32,9 @@ class StreamingService : LifecycleService() {
     private var cfgFps: Int = 60
     private var cfgBitrate: Int = 5_000_000
     private var cfgPushMic: Boolean = true
+    private var cfgCaptureMode: CaptureModePreset = CaptureModePreset.BALANCED
+    private var cfgTorchEnabled: Boolean = false
+    private var cfgCameraId: String = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -54,9 +57,14 @@ class StreamingService : LifecycleService() {
                 cfgFps = intent.getIntExtra(EXTRA_FPS, 60)
                 cfgBitrate = intent.getIntExtra(EXTRA_BITRATE, 5_000_000)
                 cfgPushMic = intent.getBooleanExtra(EXTRA_PUSH_MIC, true)
+                cfgCaptureMode = intent.getStringExtra(EXTRA_CAPTURE_MODE)
+                    ?.let { runCatching { CaptureModePreset.valueOf(it) }.getOrNull() }
+                    ?: CaptureModePreset.BALANCED
+                cfgTorchEnabled = intent.getBooleanExtra(EXTRA_TORCH_ENABLED, false)
+                cfgCameraId = intent.getStringExtra(EXTRA_CAMERA_ID).orEmpty()
                 AppLog.i(
                     "StreamingService",
-                    "ACTION_START transport=$cfgTransport receiver=$cfgReceiver ${cfgWidth}x${cfgHeight}@$cfgFps bitrate=$cfgBitrate mic=$cfgPushMic",
+                    "ACTION_START transport=$cfgTransport receiver=$cfgReceiver ${cfgWidth}x${cfgHeight}@$cfgFps bitrate=$cfgBitrate mic=$cfgPushMic mode=$cfgCaptureMode torch=$cfgTorchEnabled camera=$cfgCameraId",
                 )
                 reconnectCount = 0
                 startStreaming("started")
@@ -90,7 +98,12 @@ class StreamingService : LifecycleService() {
         startForeground(NOTIFICATION_ID, notification)
 
         if (controller == null) {
-            controller = CameraController(this, this, null)
+            controller = CameraController(
+                this,
+                onStreamStateChanged = { state, detail ->
+                    AppLog.i("StreamingService", "stream_state=$state detail=$detail")
+                },
+            )
         }
         if (running) {
             controller?.stop()
@@ -100,6 +113,17 @@ class StreamingService : LifecycleService() {
         if (cfgTransport == "usb-aoa") {
             ensureUsbAccessoryReady("startStreaming")
         }
+        val selectedProfile =
+            CameraSurfacePipeline.chooseProfileForRequest(this, cfgWidth, cfgHeight, cfgFps, cfgCameraId)
+            ?: SupportedCaptureProfile(
+                id = "fallback_${cfgWidth}x${cfgHeight}_$cfgFps",
+                cameraId = cfgCameraId.ifBlank { "0" },
+                width = cfgWidth,
+                height = cfgHeight,
+                targetFps = cfgFps,
+                recommendedBitrate = cfgBitrate,
+                supportsTorch = false,
+            )
         controller?.start(
             transport = when (cfgTransport) {
                 "lan" -> CameraController.TransportMode.LAN
@@ -108,10 +132,12 @@ class StreamingService : LifecycleService() {
                 else -> CameraController.TransportMode.USB_ADB
             },
             receiverAddress = cfgReceiver,
-            width = cfgWidth,
-            height = cfgHeight,
-            fps = cfgFps,
-            bitrate = cfgBitrate,
+            captureSpec = CaptureSpec(
+                profile = selectedProfile,
+                mode = cfgCaptureMode,
+                torchEnabled = cfgTorchEnabled && selectedProfile.supportsTorch,
+            ),
+            streamPreviewView = null,
             pushMic = cfgPushMic,
         )
         running = true
@@ -253,9 +279,9 @@ class StreamingService : LifecycleService() {
     }
 
     private fun accessorySummary(accessory: UsbAccessory): String {
-        val manufacturer = accessory.manufacturer ?: "unknown"
-        val model = accessory.model ?: "unknown"
-        val version = accessory.version ?: "unknown"
+        val manufacturer = accessory.manufacturer?.takeIf { it.isNotBlank() } ?: "unknown"
+        val model = accessory.model?.takeIf { it.isNotBlank() } ?: "unknown"
+        val version = accessory.version?.takeIf { it.isNotBlank() } ?: "unknown"
         return "manufacturer=$manufacturer model=$model version=$version"
     }
 
@@ -314,6 +340,9 @@ class StreamingService : LifecycleService() {
         const val EXTRA_FPS = "fps"
         const val EXTRA_BITRATE = "bitrate"
         const val EXTRA_PUSH_MIC = "push_mic"
+        const val EXTRA_CAPTURE_MODE = "capture_mode"
+        const val EXTRA_TORCH_ENABLED = "torch_enabled"
+        const val EXTRA_CAMERA_ID = "camera_id"
 
         const val EXTRA_STATUS_STATE = "status_state"
         const val EXTRA_STATUS_REASON = "status_reason"

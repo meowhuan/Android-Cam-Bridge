@@ -1,0 +1,13 @@
+<resources>
+    <style name="Widget.Acb.Spinner" parent="@android:style/Widget.DeviceDefault.Spinner">
+        <item name="android:popupBackground">#1F2937</item>
+        <item name="android:textColor">#FFFFFF</item>
+        <item name="android:backgroundTint">#475569</item>
+    </style>
+
+    <style name="Widget.Acb.EditText" parent="@android:style/Widget.EditText">
+        <item name="android:textColor">#FFFFFF</item>
+        <item name="android:textColorHint">#94A3B8</item>
+        <item name="android:backgroundTint">#475569</item>
+    </style>
+</resources>

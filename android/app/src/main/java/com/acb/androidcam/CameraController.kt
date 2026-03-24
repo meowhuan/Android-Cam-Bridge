@@ -9,12 +9,8 @@ import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
-import androidx.core.app.ActivityCompat
-import androidx.lifecycle.LifecycleOwner
-import java.io.OutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import android.view.TextureView
+import androidx.core.app.ActivityCompat
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -22,25 +18,30 @@ import kotlin.math.min
 
 class CameraController(
     private val context: Context,
-    private val lifecycleOwner: LifecycleOwner,
-    private val previewView: TextureView?,
     private val onDebugEvent: ((String) -> Unit)? = null,
+    private val onStreamStateChanged: ((StreamUiState, String) -> Unit)? = null,
 ) {
     enum class TransportMode { LAN, USB_ADB, USB_NATIVE, USB_AOA }
 
-    private val uploadExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val audioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val sessionExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val running = AtomicBoolean(false)
     private val micRunning = AtomicBoolean(false)
     private val sessionLoopRunning = AtomicBoolean(false)
-    private val cameraPipeline = CameraSurfacePipeline(context, previewView)
+    private val cameraPipeline = CameraSurfacePipeline(context) { detail ->
+        AppLog.w("ACB", detail)
+        onDebugEvent?.invoke(detail)
+        emitStreamState(StreamUiState.ERROR, detail)
+    }
 
     private var currentMode: TransportMode = TransportMode.USB_ADB
     private var currentReceiver = "127.0.0.1:39393"
     private var targetWidth = 1280
     private var targetHeight = 720
-    private val v2Client = V2MediaClient { onDebugEvent?.invoke(it) }
+    private val v2Client = V2MediaClient(
+        onDebugEvent = { onDebugEvent?.invoke(it) },
+        onStreamStateChanged = { state, detail -> emitStreamState(state, detail) },
+    )
     @Volatile private var videoEncoder: VideoAvcEncoder? = null
     @Volatile private var audioEncoder: AudioAacEncoder? = null
     private var lastStartAtMs = 0L
@@ -48,10 +49,8 @@ class CameraController(
     fun start(
         transport: TransportMode,
         receiverAddress: String,
-        width: Int,
-        height: Int,
-        fps: Int,
-        bitrate: Int,
+        captureSpec: CaptureSpec,
+        streamPreviewView: TextureView?,
         pushMic: Boolean,
     ) {
         if (!running.compareAndSet(false, true)) return
@@ -64,32 +63,37 @@ class CameraController(
             transport == TransportMode.USB_AOA -> ""
             else -> "127.0.0.1:39393"
         }
-        val captureSize = CameraSurfacePipeline.resolveCaptureSize(context, width, height)
-        targetWidth = captureSize.width
-        targetHeight = captureSize.height
 
-        val startLine = "start transport=$transport receiver=$currentReceiver ${targetWidth}x${targetHeight}@$fps bitrate=$bitrate mic=$pushMic"
+        val captureProfile = CameraSurfacePipeline.prepareCaptureProfile(context, captureSpec)
+        targetWidth = captureProfile.captureSize.width
+        targetHeight = captureProfile.captureSize.height
+        val effectiveBitrate = chooseEffectiveBitrate(
+            targetWidth,
+            targetHeight,
+            captureProfile.actualFpsRange.upper,
+            captureSpec.preferredBitrate,
+        )
+
+        val startLine =
+            "start transport=$transport receiver=$currentReceiver request=${captureSpec.displayLabel} actual=${captureProfile.actualLabel} bitrate=$effectiveBitrate torch=${captureProfile.torchEnabled} mic=$pushMic"
         AppLog.i("ACB", startLine)
         onDebugEvent?.invoke(startLine)
+        emitStreamState(StreamUiState.CONNECTING, "Preparing stream")
         lastStartAtMs = System.currentTimeMillis()
 
         try {
             if (videoEncoder == null) {
-                videoEncoder = VideoAvcEncoder(targetWidth, targetHeight, bitrate, fps) { avc, isKey ->
+                videoEncoder = VideoAvcEncoder(targetWidth, targetHeight, effectiveBitrate, captureProfile.actualFpsRange.upper) { avc, isKey ->
                     v2Client.sendVideoFrame(avc, isKey)
                 }
-                AppLog.i("ACB", "video encoder ready ${targetWidth}x${targetHeight}@$fps bitrate=$bitrate")
+                AppLog.i("ACB", "video encoder ready ${targetWidth}x${targetHeight}@${captureProfile.actualFpsRange.upper} bitrate=$effectiveBitrate")
             }
-            cameraPipeline.start(
-                width = targetWidth,
-                height = targetHeight,
-                fps = fps,
-                encoderSurface = videoEncoder!!.inputSurface,
-            )
+            cameraPipeline.start(captureProfile, videoEncoder!!.inputSurface, streamPreviewView)
         } catch (t: Throwable) {
             val line = "video pipeline init failed: ${t.message}"
             AppLog.e("ACB", line, t)
             onDebugEvent?.invoke(line)
+            emitStreamState(StreamUiState.ERROR, line)
         }
 
         val transportName = when (transport) {
@@ -100,10 +104,7 @@ class CameraController(
         }
         startSessionLoop(
             transportName = transportName,
-            width = targetWidth,
-            height = targetHeight,
-            fps = fps,
-            bitrate = bitrate,
+            captureSpec = captureSpec,
         )
 
         if (pushMic) {
@@ -123,6 +124,7 @@ class CameraController(
         audioEncoder = null
         v2Client.close()
 
+        emitStreamState(StreamUiState.STOPPED, "Stream stopped")
         AppLog.i("ACB", "stop stream")
     }
 
@@ -132,7 +134,6 @@ class CameraController(
         if (!running.get()) return false
         val now = System.currentTimeMillis()
         if (now - lastStartAtMs < 6000) {
-            // Warm-up window for encoder/websocket startup.
             return true
         }
         return v2Client.isConnected()
@@ -207,12 +208,7 @@ class CameraController(
                 return@execute
             }
 
-            if (
-                ActivityCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.RECORD_AUDIO
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
+            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 AppLog.w("ACB", "RECORD_AUDIO permission not granted, skip mic stream")
                 micRunning.set(false)
                 return@execute
@@ -235,9 +231,6 @@ class CameraController(
                 while (running.get() && micRunning.get()) {
                     val read = recorder.read(buffer, 0, buffer.size)
                     if (read > 0) {
-                        if (shouldPushLegacyHttp()) {
-                            postAudio(buffer, read, sampleRate, 1)
-                        }
                         audioEncoder?.encodePcm(buffer, read, sampleRate, 1) { aac ->
                             v2Client.sendAudioFrame(aac, aac.size)
                         }
@@ -257,63 +250,9 @@ class CameraController(
         }
     }
 
-    private fun postFrame(jpeg: ByteArray, width: Int, height: Int) {
-        val endpoint = "http://$currentReceiver/api/v1/frame"
-        var conn: HttpURLConnection? = null
-        try {
-            conn = URL(endpoint).openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.connectTimeout = 1500
-            conn.readTimeout = 1500
-            conn.doOutput = true
-            conn.setRequestProperty("Content-Type", "image/jpeg")
-            conn.setRequestProperty("X-Width", width.toString())
-            conn.setRequestProperty("X-Height", height.toString())
-            conn.setRequestProperty("X-Transport", currentMode.name)
-            conn.outputStream.use { os: OutputStream ->
-                os.write(jpeg)
-            }
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                AppLog.w("ACB", "frame upload http=$code endpoint=$endpoint")
-            }
-        } catch (t: Throwable) {
-            AppLog.w("ACB", "frame upload failed: ${t.message}", t)
-        } finally {
-            conn?.disconnect()
-        }
-    }
-
-    private fun postAudio(pcm: ByteArray, length: Int, sampleRate: Int, channels: Int) {
-        val endpoint = "http://$currentReceiver/api/v1/audio"
-        var conn: HttpURLConnection? = null
-        try {
-            conn = URL(endpoint).openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.connectTimeout = 1500
-            conn.readTimeout = 1500
-            conn.doOutput = true
-            conn.setRequestProperty("Content-Type", "application/octet-stream")
-            conn.setRequestProperty("X-Sample-Rate", sampleRate.toString())
-            conn.setRequestProperty("X-Channels", channels.toString())
-            conn.outputStream.use { os: OutputStream ->
-                os.write(pcm, 0, length)
-            }
-            conn.responseCode
-        } catch (_: Throwable) {
-        } finally {
-            conn?.disconnect()
-        }
-    }
-
-    private fun shouldPushLegacyHttp(): Boolean = false
-
     private fun startSessionLoop(
         transportName: String,
-        width: Int,
-        height: Int,
-        fps: Int,
-        bitrate: Int,
+        captureSpec: CaptureSpec,
     ) {
         if (!sessionLoopRunning.compareAndSet(false, true)) return
         sessionExecutor.execute {
@@ -337,29 +276,48 @@ class CameraController(
                         val line = "encoder init failed: ${t.message}"
                         AppLog.e("ACB", line, t)
                         onDebugEvent?.invoke(line)
+                        emitStreamState(StreamUiState.ERROR, line)
                         attempt += 1
                         sleepQuietly(1000)
                         continue
                     }
+                    emitStreamState(StreamUiState.CONNECTING, "Connecting ${captureSpec.displayLabel}")
                     v2Client.connect(v2Session.wsUrl)
                     val line = "v2 session connect attempt ok transport=$transportName receiver=$currentReceiver"
                     AppLog.i("ACB", line)
                     onDebugEvent?.invoke(line)
                     attempt = 0
-                    // Give websocket/usb-native handshake a short window to settle.
                     sleepQuietly(1200)
                 } else {
                     attempt += 1
                     val backoffMs = min(3000, 500 + attempt * 250)
+                    val line = "v2 session retry #$attempt transport=$transportName receiver=$currentReceiver"
                     if (attempt == 1 || attempt % 6 == 0) {
-                        val line = "v2 session retry #$attempt transport=$transportName receiver=$currentReceiver"
                         AppLog.w("ACB", line)
                         onDebugEvent?.invoke(line)
                     }
+                    emitStreamState(StreamUiState.CONNECTING, "Waiting for receiver ($attempt)")
                     sleepQuietly(backoffMs.toLong())
                 }
             }
             sessionLoopRunning.set(false)
+        }
+    }
+
+    private fun emitStreamState(state: StreamUiState, detail: String) {
+        onStreamStateChanged?.invoke(state, detail)
+    }
+
+    private fun chooseEffectiveBitrate(width: Int, height: Int, fps: Int, preferredBitrate: Int): Int {
+        val recommended = when {
+            width >= 1920 -> if (fps >= 60) 12_000_000 else 8_000_000
+            width >= 1280 -> if (fps >= 60) 7_000_000 else 4_500_000
+            else -> if (fps >= 60) 3_500_000 else 2_000_000
+        }
+        return when {
+            preferredBitrate <= 0 -> recommended
+            preferredBitrate > recommended -> recommended
+            else -> preferredBitrate
         }
     }
 

@@ -34,6 +34,9 @@ class VideoAvcEncoder(
             if (android.os.Build.VERSION.SDK_INT >= 23) {
                 setInteger(MediaFormat.KEY_PRIORITY, 0)
             }
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+            }
             if (android.os.Build.VERSION.SDK_INT >= 30) {
                 setInteger(MediaFormat.KEY_LATENCY, 1)
             }
@@ -68,10 +71,6 @@ class VideoAvcEncoder(
             }
             if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 AppLog.i("VideoAvcEncoder", "output format changed: ${codec.outputFormat}")
-                continue
-            }
-            if (outIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
-                AppLog.d("VideoAvcEncoder", "output buffers changed")
                 continue
             }
             if (outIndex < 0) {

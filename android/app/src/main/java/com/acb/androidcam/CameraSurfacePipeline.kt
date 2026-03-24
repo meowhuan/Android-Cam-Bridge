@@ -3,14 +3,19 @@ package com.acb.androidcam
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Matrix
+import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
 import android.hardware.camera2.params.StreamConfigurationMap
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Range
@@ -22,60 +27,199 @@ import kotlin.math.abs
 
 class CameraSurfacePipeline(
     private val context: Context,
-    private val previewView: TextureView?,
+    private val onError: ((String) -> Unit)? = null,
 ) {
     companion object {
         private const val TAG = "CameraSurfacePipeline"
 
-        fun resolveCaptureSize(context: Context, width: Int, height: Int): Size {
+        data class CaptureProfile(
+            val selectedProfile: SupportedCaptureProfile,
+            val captureSize: Size,
+            val actualFpsRange: Range<Int>,
+            val mode: CaptureModePreset,
+            val torchEnabled: Boolean,
+        ) {
+            val cameraId: String
+                get() = selectedProfile.cameraId
+
+            val actualLabel: String
+                get() = "${captureSize.width}x${captureSize.height}@${actualFpsRange.upper} (${mode.name.lowercase()})"
+        }
+
+        fun enumerateSupportedProfiles(context: Context): List<SupportedCaptureProfile> {
             return try {
                 val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-                val cameraId = findBackCameraId(manager) ?: manager.cameraIdList.firstOrNull()
-                if (cameraId == null) {
-                    Size(width, height)
-                } else {
-                    val characteristics = manager.getCameraCharacteristics(cameraId)
-                    chooseBestSize(
-                        characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP),
-                        width,
-                        height,
+                val cameraId = findBestBackCameraId(manager) ?: return emptyList()
+                val characteristics = manager.getCameraCharacteristics(cameraId)
+                val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return emptyList()
+                val flashAvailable = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                val recorderSizes = map.getOutputSizes(MediaRecorder::class.java)
+                    ?: map.getOutputSizes(SurfaceTexture::class.java)
+                    ?: return emptyList()
+                val exactSizes = listOf(
+                    Size(640, 480),
+                    Size(1280, 720),
+                    Size(1920, 1080),
+                )
+                val supportedFps = chooseSupportedFpsTargets(characteristics)
+                val profiles = mutableListOf<SupportedCaptureProfile>()
+                for (requested in exactSizes) {
+                    val matchedSize = chooseBestSize(recorderSizes, requested.width, requested.height)
+                    if (matchedSize.width != requested.width || matchedSize.height != requested.height) {
+                        continue
+                    }
+                    for (fps in supportedFps) {
+                        val id = "${cameraId}_${matchedSize.width}x${matchedSize.height}_${fps}"
+                        profiles += SupportedCaptureProfile(
+                            id = id,
+                            cameraId = cameraId,
+                            width = matchedSize.width,
+                            height = matchedSize.height,
+                            targetFps = fps,
+                            recommendedBitrate = recommendedBitrate(matchedSize.width, matchedSize.height, fps),
+                            supportsTorch = flashAvailable,
+                        )
+                    }
+                }
+                if (profiles.isEmpty()) {
+                    val fallback = chooseBestSize(recorderSizes, 1280, 720)
+                    profiles += SupportedCaptureProfile(
+                        id = "${cameraId}_${fallback.width}x${fallback.height}_30",
+                        cameraId = cameraId,
+                        width = fallback.width,
+                        height = fallback.height,
+                        targetFps = minOf(30, supportedFps.maxOrNull() ?: 30),
+                        recommendedBitrate = recommendedBitrate(fallback.width, fallback.height, minOf(30, supportedFps.maxOrNull() ?: 30)),
+                        supportsTorch = flashAvailable,
                     )
                 }
+                profiles
             } catch (t: Throwable) {
-                AppLog.w(TAG, "resolveCaptureSize failed: ${t.message}", t)
-                Size(width, height)
+                AppLog.w(TAG, "enumerateSupportedProfiles failed: ${t.message}", t)
+                emptyList()
             }
         }
 
-        private fun findBackCameraId(manager: CameraManager): String? {
-            return manager.cameraIdList.firstOrNull { id ->
-                val facing = manager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING)
-                facing == CameraCharacteristics.LENS_FACING_BACK
+        fun chooseProfileForRequest(
+            context: Context,
+            width: Int,
+            height: Int,
+            fps: Int,
+            preferredCameraId: String? = null,
+        ): SupportedCaptureProfile? {
+            val profiles = enumerateSupportedProfiles(context)
+            if (profiles.isEmpty()) return null
+            val scoped = if (!preferredCameraId.isNullOrBlank()) {
+                profiles.filter { it.cameraId == preferredCameraId }.ifEmpty { profiles }
+            } else {
+                profiles
+            }
+            return scoped.minWithOrNull(
+                compareBy<SupportedCaptureProfile> {
+                    abs(it.width - width) + abs(it.height - height) + abs(it.targetFps - fps)
+                }.thenBy { if (it.width == width && it.height == height) 0 else 1 }
+                    .thenBy { if (it.targetFps == fps) 0 else 1 }
+            ) ?: scoped.first()
+        }
+
+        fun prepareCaptureProfile(context: Context, spec: CaptureSpec): CaptureProfile {
+            val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val characteristics = manager.getCameraCharacteristics(spec.profile.cameraId)
+            val actualRange = chooseCaptureRange(characteristics, spec.profile.targetFps, spec.mode)
+            return CaptureProfile(
+                selectedProfile = spec.profile,
+                captureSize = Size(spec.profile.width, spec.profile.height),
+                actualFpsRange = actualRange,
+                mode = spec.mode,
+                torchEnabled = spec.torchEnabled && spec.profile.supportsTorch,
+            )
+        }
+
+        private fun chooseSupportedFpsTargets(characteristics: CameraCharacteristics): List<Int> {
+            val ranges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
+            val out = mutableListOf<Int>()
+            if (ranges.any { it.upper >= 30 }) out += 30
+            if (ranges.any { it.upper >= 60 }) out += 60
+            return if (out.isEmpty()) listOf(30) else out
+        }
+
+        private fun chooseCaptureRange(
+            characteristics: CameraCharacteristics,
+            targetFps: Int,
+            mode: CaptureModePreset,
+        ): Range<Int> {
+            val ranges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
+            if (ranges.isEmpty()) return Range(15, maxOf(15, targetFps))
+            return when (mode) {
+                CaptureModePreset.LATENCY -> ranges
+                    .filter { it.upper >= targetFps }
+                    .minWithOrNull(compareBy<Range<Int>> { abs(it.upper - targetFps) }.thenBy { abs(it.upper - it.lower) })
+                    ?: ranges.maxByOrNull { it.upper }!!
+                CaptureModePreset.BALANCED -> ranges
+                    .filter { it.upper >= targetFps }
+                    .minWithOrNull(compareBy<Range<Int>> { abs(it.upper - targetFps) }.thenByDescending { it.lower })
+                    ?: ranges.maxByOrNull { it.upper }!!
+                CaptureModePreset.LOW_LIGHT -> {
+                    val capped = minOf(targetFps, 30)
+                    ranges
+                        .filter { it.upper >= capped }
+                        .minWithOrNull(compareBy<Range<Int>> { abs(it.upper - capped) }.thenBy { it.lower })
+                        ?: ranges.minByOrNull { it.lower }!!
+                }
             }
         }
 
-        private fun chooseBestSize(map: StreamConfigurationMap?, width: Int, height: Int): Size {
+        private fun findBestBackCameraId(manager: CameraManager): String? {
+            data class Candidate(
+                val id: String,
+                val maxArea: Long,
+                val hasContinuousAf: Boolean,
+                val focalLength: Float,
+            )
+
+            val candidates = manager.cameraIdList.mapNotNull { id ->
+                val characteristics = manager.getCameraCharacteristics(id)
+                if (characteristics.get(CameraCharacteristics.LENS_FACING) != CameraCharacteristics.LENS_FACING_BACK) {
+                    return@mapNotNull null
+                }
+                val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return@mapNotNull null
+                val sizes = map.getOutputSizes(MediaRecorder::class.java)
+                    ?: map.getOutputSizes(SurfaceTexture::class.java)
+                    ?: return@mapNotNull null
+                val maxArea = sizes.maxOfOrNull { it.width.toLong() * it.height.toLong() } ?: 0L
+                val afModes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+                val hasContinuousAf = afModes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                val focalLength = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull() ?: 0f
+                Candidate(id, maxArea, hasContinuousAf, focalLength)
+            }
+
+            return candidates.maxWithOrNull(
+                compareBy<Candidate> { it.maxArea }
+                    .thenBy { if (it.hasContinuousAf) 1 else 0 }
+                    .thenByDescending { it.focalLength }
+            )?.id
+        }
+
+        private fun chooseBestSize(candidates: Array<Size>, width: Int, height: Int): Size {
             val requestedLong = maxOf(width, height)
             val requestedShort = minOf(width, height)
-            val candidates = map?.getOutputSizes(MediaRecorder::class.java)
-                ?: map?.getOutputSizes(SurfaceTexture::class.java)
-                ?: emptyArray()
-            if (candidates.isEmpty()) {
-                return Size(width, height)
-            }
-
             return candidates.minWithOrNull(
                 compareBy<Size> { abs(maxOf(it.width, it.height) - requestedLong) + abs(minOf(it.width, it.height) - requestedShort) }
                     .thenBy { abs((it.width * it.height) - (width * height)) }
-            ) ?: Size(width, height)
+            ) ?: candidates.first()
+        }
+
+        private fun recommendedBitrate(width: Int, height: Int, fps: Int): Int = when {
+            width >= 1920 -> if (fps >= 60) 12_000_000 else 8_000_000
+            width >= 1280 -> if (fps >= 60) 7_000_000 else 4_500_000
+            else -> if (fps >= 60) 3_500_000 else 2_000_000
         }
     }
 
     private data class Config(
-        val width: Int,
-        val height: Int,
-        val fps: Int,
+        val profile: CaptureProfile,
         val encoderSurface: Surface,
+        val previewView: TextureView?,
     )
 
     private var cameraThread: HandlerThread? = null
@@ -89,13 +233,13 @@ class CameraSurfacePipeline(
     private var activeCameraId: String? = null
     private var activeConfig: Config? = null
 
-    fun start(width: Int, height: Int, fps: Int, encoderSurface: Surface) {
+    fun start(profile: CaptureProfile, encoderSurface: Surface, previewView: TextureView?) {
         stop()
         running = true
-        activeConfig = Config(width = width, height = height, fps = fps, encoderSurface = encoderSurface)
+        activeConfig = Config(profile = profile, encoderSurface = encoderSurface, previewView = previewView)
         ensureCameraThread()
-        ensurePreviewListener()
-        openCameraWhenReady("start")
+        ensurePreviewListener(previewView)
+        openCamera("start")
     }
 
     fun stop() {
@@ -120,13 +264,6 @@ class CameraSurfacePipeline(
         cameraThread = null
         cameraHandler = null
         activeCameraId = null
-
-        previewView?.let {
-            if (surfaceListenerInstalled) {
-                it.surfaceTextureListener = null
-                surfaceListenerInstalled = false
-            }
-        }
     }
 
     private fun ensureCameraThread() {
@@ -137,27 +274,26 @@ class CameraSurfacePipeline(
         cameraHandler = Handler(thread.looper)
     }
 
-    private fun ensurePreviewListener() {
+    private fun ensurePreviewListener(previewView: TextureView?) {
         val textureView = previewView ?: return
         if (surfaceListenerInstalled) return
         textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-                AppLog.i(TAG, "preview surface available ${width}x${height}")
+                AppLog.i(TAG, "stream preview available ${width}x${height}")
+                updatePreviewTransform()
                 val handler = cameraHandler
                 val device = cameraDevice
                 if (handler != null && device != null && running) {
                     handler.post { createCaptureSession(device) }
-                } else {
-                    openCameraWhenReady("preview_available")
                 }
             }
 
             override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
+                updatePreviewTransform()
             }
 
             override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                val handler = cameraHandler
-                handler?.post { releasePreviewSurfaceLocked() }
+                cameraHandler?.post { releasePreviewSurfaceLocked() }
                 return true
             }
 
@@ -167,14 +303,9 @@ class CameraSurfacePipeline(
         surfaceListenerInstalled = true
     }
 
-    private fun openCameraWhenReady(reason: String) {
+    private fun openCamera(reason: String) {
         val config = activeConfig ?: return
         if (!running) return
-        val textureView = previewView
-        if (textureView != null && !textureView.isAvailable) {
-            AppLog.i(TAG, "waiting for preview surface reason=$reason")
-            return
-        }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             AppLog.w(TAG, "CAMERA permission missing reason=$reason")
             return
@@ -184,19 +315,18 @@ class CameraSurfacePipeline(
         handler.post {
             if (!running || pendingOpen || cameraDevice != null) return@post
             try {
-                val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-                val cameraId = findBackCameraId(manager) ?: manager.cameraIdList.firstOrNull()
-                if (cameraId.isNullOrBlank()) {
-                    AppLog.e(TAG, "No camera available")
-                    return@post
-                }
                 pendingOpen = true
-                activeCameraId = cameraId
-                AppLog.i(TAG, "opening camera id=$cameraId reason=$reason capture=${config.width}x${config.height}@${config.fps}")
-                manager.openCamera(cameraId, buildStateCallback(cameraId), handler)
+                activeCameraId = config.profile.cameraId
+                AppLog.i(
+                    TAG,
+                    "opening camera id=${config.profile.cameraId} reason=$reason actual=${config.profile.actualLabel} torch=${config.profile.torchEnabled}",
+                )
+                val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                manager.openCamera(config.profile.cameraId, buildStateCallback(config.profile.cameraId), handler)
             } catch (t: Throwable) {
                 pendingOpen = false
                 AppLog.e(TAG, "openCamera failed: ${t.message}", t)
+                onError?.invoke("openCamera failed: ${t.message}")
             }
         }
     }
@@ -217,6 +347,7 @@ class CameraSurfacePipeline(
             override fun onDisconnected(device: CameraDevice) {
                 pendingOpen = false
                 AppLog.w(TAG, "camera disconnected id=$cameraId")
+                onError?.invoke("camera disconnected")
                 closeSessionLocked()
                 closeDeviceLocked()
             }
@@ -224,6 +355,7 @@ class CameraSurfacePipeline(
             override fun onError(device: CameraDevice, error: Int) {
                 pendingOpen = false
                 AppLog.e(TAG, "camera error id=$cameraId error=$error")
+                onError?.invoke("camera error=$error")
                 closeSessionLocked()
                 closeDeviceLocked()
             }
@@ -237,48 +369,84 @@ class CameraSurfacePipeline(
             closeSessionLocked()
             releasePreviewSurfaceLocked()
             val surfaces = mutableListOf<Surface>()
-            val preview = buildPreviewSurface(config.width, config.height)
+            val preview = buildPreviewSurface(config.profile.captureSize, config.previewView)
             if (preview != null) {
                 previewSurface = preview
                 surfaces += preview
             }
             surfaces += config.encoderSurface
 
-            device.createCaptureSession(
-                surfaces,
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        if (!running) {
-                            session.close()
-                            return
-                        }
-                        captureSession = session
-                        startRepeating(session, device, config)
-                    }
-
-                    override fun onConfigureFailed(session: CameraCaptureSession) {
-                        AppLog.e(TAG, "capture session configure failed")
+            val callback = object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(session: CameraCaptureSession) {
+                    if (!running) {
                         session.close()
+                        return
                     }
-                },
-                handler,
-            )
+                    captureSession = session
+                    startRepeating(session, device, config)
+                    updatePreviewTransform()
+                }
+
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                    AppLog.e(TAG, "capture session configure failed")
+                    session.close()
+                }
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val outputs = surfaces.map { OutputConfiguration(it) }
+                val sessionConfig = SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR,
+                    outputs,
+                    context.mainExecutor,
+                    callback,
+                )
+                device.createCaptureSession(sessionConfig)
+            } else {
+                @Suppress("DEPRECATION")
+                device.createCaptureSession(
+                    surfaces,
+                    callback,
+                    handler,
+                )
+            }
         } catch (t: Throwable) {
             AppLog.e(TAG, "createCaptureSession failed: ${t.message}", t)
+            onError?.invoke("capture session failed: ${t.message}")
         }
     }
 
     private fun startRepeating(session: CameraCaptureSession, device: CameraDevice, config: Config) {
         try {
             val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-            val characteristics = manager.getCameraCharacteristics(activeCameraId ?: return)
+            val characteristics = manager.getCameraCharacteristics(config.profile.cameraId)
             val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(config.encoderSurface)
                 previewSurface?.let { addTarget(it) }
+                set(CaptureRequest.CONTROL_CAPTURE_INTENT, CaptureRequest.CONTROL_CAPTURE_INTENT_VIDEO_RECORD)
                 set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-                chooseFpsRange(characteristics, config.fps)?.let {
-                    set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it)
+                set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, config.profile.actualFpsRange)
+                when (config.profile.mode) {
+                    CaptureModePreset.LATENCY -> {
+                        set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+                        set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
+                    }
+                    CaptureModePreset.BALANCED -> {
+                        set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+                        set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
+                    }
+                    CaptureModePreset.LOW_LIGHT -> {
+                        set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
+                        set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
+                    }
+                }
+                if (config.profile.torchEnabled && characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true) {
+                    set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
+                } else {
+                    set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
                 }
                 if (characteristics.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
                         ?.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON) == true) {
@@ -286,26 +454,71 @@ class CameraSurfacePipeline(
                 }
             }.build()
             session.setRepeatingRequest(request, null, cameraHandler)
-            AppLog.i(TAG, "capture repeating started ${config.width}x${config.height}@${config.fps}")
+            AppLog.i(
+                TAG,
+                "capture repeating started actual=${config.profile.actualLabel} torch=${config.profile.torchEnabled}",
+            )
         } catch (t: Throwable) {
             AppLog.e(TAG, "startRepeating failed: ${t.message}", t)
+            onError?.invoke("capture repeat failed: ${t.message}")
         }
     }
 
-    private fun buildPreviewSurface(width: Int, height: Int): Surface? {
+    private fun buildPreviewSurface(size: Size, previewView: TextureView?): Surface? {
         val textureView = previewView ?: return null
         val texture = textureView.surfaceTexture ?: return null
-        texture.setDefaultBufferSize(width, height)
+        texture.setDefaultBufferSize(size.width, size.height)
         return Surface(texture)
     }
 
-    private fun chooseFpsRange(characteristics: CameraCharacteristics, targetFps: Int): Range<Int>? {
-        val ranges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: return null
-        if (ranges.isEmpty()) return null
-        return ranges.minWithOrNull(
-            compareBy<Range<Int>> { abs(it.upper - targetFps) + abs(it.lower - targetFps) }
-                .thenBy { abs(it.upper - it.lower) }
-        )
+    private fun updatePreviewTransform() {
+        val config = activeConfig ?: return
+        val textureView = config.previewView ?: return
+        val cameraId = activeCameraId ?: return
+        if (textureView.width == 0 || textureView.height == 0) return
+
+        textureView.post {
+            try {
+                val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                val characteristics = manager.getCameraCharacteristics(cameraId)
+                val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+                val displayRotation = textureView.display?.rotation ?: Surface.ROTATION_0
+                val relativeRotation = computeRelativeRotation(sensorOrientation, displayRotation)
+
+                val matrix = Matrix()
+                val viewRect = RectF(0f, 0f, textureView.width.toFloat(), textureView.height.toFloat())
+                val bufferRect = RectF(0f, 0f, config.profile.captureSize.width.toFloat(), config.profile.captureSize.height.toFloat())
+
+                matrix.postTranslate(-bufferRect.centerX(), -bufferRect.centerY())
+                matrix.postRotate(relativeRotation.toFloat())
+
+                val rotatedRect = RectF(bufferRect)
+                matrix.mapRect(rotatedRect)
+                val scale = maxOf(
+                    viewRect.width() / rotatedRect.width(),
+                    viewRect.height() / rotatedRect.height(),
+                )
+                matrix.postScale(scale, scale)
+                matrix.postTranslate(viewRect.centerX(), viewRect.centerY())
+                textureView.setTransform(matrix)
+                AppLog.d(
+                    TAG,
+                    "stream preview transform rotation=$relativeRotation view=${textureView.width}x${textureView.height} buffer=${config.profile.captureSize.width}x${config.profile.captureSize.height}",
+                )
+            } catch (t: Throwable) {
+                AppLog.w(TAG, "updatePreviewTransform failed: ${t.message}", t)
+            }
+        }
+    }
+
+    private fun computeRelativeRotation(sensorOrientation: Int, displayRotation: Int): Int {
+        val displayDegrees = when (displayRotation) {
+            Surface.ROTATION_90 -> 90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else -> 0
+        }
+        return (sensorOrientation - displayDegrees + 360) % 360
     }
 
     private fun closeSessionLocked() {

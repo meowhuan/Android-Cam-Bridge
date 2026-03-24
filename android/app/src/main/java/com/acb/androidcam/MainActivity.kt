@@ -15,6 +15,7 @@ import android.os.Bundle
 import android.view.TextureView
 import android.view.View
 import android.view.WindowManager
+import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
@@ -24,21 +25,20 @@ import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-data class ResolutionPreset(val label: String, val width: Int, val height: Int) {
-    override fun toString(): String = label
-}
-
-data class FpsPreset(val label: String, val fps: Int) {
+data class CaptureModeOption(val preset: CaptureModePreset, val label: String) {
     override fun toString(): String = label
 }
 
 class MainActivity : AppCompatActivity() {
     private lateinit var controller: CameraController
+    private lateinit var previewController: PreviewController
+
     private var usbAccessoryTransport: UsbAccessoryTransport? = null
     private var pendingAccessory: UsbAccessory? = null
     private var isLandscapeLocked = false
@@ -46,29 +46,69 @@ class MainActivity : AppCompatActivity() {
     private var backgroundStreamingEnabled = false
     private var controlsVisible = true
     private var debugModeEnabled = false
-    private var selectedFps = 60
     private var isStreaming = false
+    private var isActivityVisible = false
+    private var suppressSelectionCallbacks = true
+
+    private var availableProfiles: List<SupportedCaptureProfile> = emptyList()
+    private lateinit var modeOptions: List<CaptureModeOption>
+
     private var statusTextView: TextView? = null
+    private var previewStateTextView: TextView? = null
+    private var streamStateTextView: TextView? = null
+    private var previewDetailTextView: TextView? = null
+    private var actualProfileTextView: TextView? = null
     private var debugOverlayView: View? = null
     private var debugLogScrollView: ScrollView? = null
     private var debugLogTextView: TextView? = null
+    private var captureProfileSpinner: Spinner? = null
+    private var captureModeSpinner: Spinner? = null
+    private var transportSpinner: Spinner? = null
+    private var hostInput: EditText? = null
+    private var micCheckbox: CheckBox? = null
+    private var backgroundStreamingCheckbox: CheckBox? = null
+    private var sleepProtectionCheckbox: CheckBox? = null
+    private var debugModeCheckbox: CheckBox? = null
+    private var torchCheckbox: CheckBox? = null
+    private var toggleUiButton: Button? = null
+    private var idlePreviewView: PreviewView? = null
+    private var streamPreviewView: TextureView? = null
+
     private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.US)
 
     private val streamingStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action != StreamingService.ACTION_STATUS) return
+            if (intent?.action != StreamingService.ACTION_STATUS || !backgroundStreamingEnabled) return
             val state = intent.getStringExtra(StreamingService.EXTRA_STATUS_STATE) ?: "unknown"
             val reason = intent.getStringExtra(StreamingService.EXTRA_STATUS_REASON) ?: ""
             val receiver = intent.getStringExtra(StreamingService.EXTRA_RECEIVER) ?: ""
-            val reconnect = intent.getIntExtra(StreamingService.EXTRA_STATUS_RECONNECT_COUNT, 0)
-            val line = "FGS: $state / reconnect=$reconnect / $receiver / $reason"
-            statusTextView?.text = line
+            when (state) {
+                "running" -> {
+                    isStreaming = true
+                    renderStreamState(StreamUiState.STREAMING, "Background stream active -> $receiver")
+                    renderPreviewState(PreviewUiState.PAUSED, getString(R.string.preview_hint_background))
+                    showPreviewSurfaces(idleVisible = false, streamVisible = false)
+                }
+                "reconnecting" -> {
+                    isStreaming = true
+                    renderStreamState(StreamUiState.CONNECTING, "Background reconnecting: $reason")
+                    renderPreviewState(PreviewUiState.PAUSED, getString(R.string.preview_hint_background))
+                    showPreviewSurfaces(idleVisible = false, streamVisible = false)
+                }
+                else -> {
+                    isStreaming = false
+                    renderStreamState(StreamUiState.STOPPED, "Background stream stopped")
+                    bindPreviewIfPossible("background_stream_stopped")
+                }
+            }
         }
     }
 
     private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { }
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) {
+        bindPreviewIfPossible("permission_result")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,89 +126,106 @@ class MainActivity : AppCompatActivity() {
             ?: prefs.getBoolean(KEY_CONTROLS_VISIBLE, true)
         debugModeEnabled = savedInstanceState?.getBoolean(KEY_DEBUG_MODE)
             ?: prefs.getBoolean(KEY_DEBUG_MODE, false)
-        selectedFps = savedInstanceState?.getInt(KEY_FPS)
-            ?: prefs.getInt(KEY_FPS, 60)
 
         applyOrientationLock()
 
-        val status = findViewById<TextView>(R.id.statusText)
-        statusTextView = status
+        idlePreviewView = findViewById(R.id.previewView)
+        streamPreviewView = findViewById(R.id.streamPreviewView)
+        previewStateTextView = findViewById(R.id.previewStateText)
+        streamStateTextView = findViewById(R.id.streamStateText)
+        previewDetailTextView = findViewById(R.id.previewDetailText)
+        actualProfileTextView = findViewById(R.id.actualProfileText)
+        statusTextView = findViewById(R.id.statusText)
         debugOverlayView = findViewById(R.id.debugOverlay)
         debugLogScrollView = findViewById(R.id.debugLogScroll)
         debugLogTextView = findViewById(R.id.debugLogText)
-        val previewView = findViewById<TextureView>(R.id.previewView)
-        controller = CameraController(this, this, previewView) { msg ->
-            runOnUiThread {
-                if (debugModeEnabled) {
-                    appendDebugLogLine(msg)
-                }
-            }
-        }
+        captureProfileSpinner = findViewById(R.id.captureProfileSpinner)
+        captureModeSpinner = findViewById(R.id.captureModeSpinner)
+        transportSpinner = findViewById(R.id.transportSpinner)
+        hostInput = findViewById(R.id.hostInput)
+        micCheckbox = findViewById(R.id.micCheckbox)
+        backgroundStreamingCheckbox = findViewById(R.id.backgroundStreamingCheckbox)
+        sleepProtectionCheckbox = findViewById(R.id.sleepProtectionCheckbox)
+        debugModeCheckbox = findViewById(R.id.debugModeCheckbox)
+        torchCheckbox = findViewById(R.id.torchCheckbox)
+        toggleUiButton = findViewById(R.id.toggleUiButton)
+
+        val previewView = requireNotNull(idlePreviewView)
+        previewController = PreviewController(
+            context = this,
+            lifecycleOwner = this,
+            previewView = previewView,
+            onStateChanged = { state, detail -> runOnUiThread { renderPreviewState(state, detail) } },
+            onDebugEvent = { msg -> runOnUiThread { if (debugModeEnabled) appendDebugLogLine(msg) } },
+        )
+        controller = CameraController(
+            context = this,
+            onDebugEvent = { msg -> runOnUiThread { if (debugModeEnabled) appendDebugLogLine(msg) } },
+            onStreamStateChanged = { state, detail -> runOnUiThread { renderStreamState(state, detail) } },
+        )
+
         val start = findViewById<Button>(R.id.startButton)
         val stop = findViewById<Button>(R.id.stopButton)
-        val hostInput = findViewById<EditText>(R.id.hostInput)
-        val transportSpinner = findViewById<Spinner>(R.id.transportSpinner)
-        val resolutionSpinner = findViewById<Spinner>(R.id.resolutionSpinner)
-        val fpsSpinner = findViewById<Spinner>(R.id.fpsSpinner)
-        val micCheckbox = findViewById<CheckBox>(R.id.micCheckbox)
-        val sleepProtectionCheckbox = findViewById<CheckBox>(R.id.sleepProtectionCheckbox)
-        val backgroundStreamingCheckbox = findViewById<CheckBox>(R.id.backgroundStreamingCheckbox)
-        val debugModeCheckbox = findViewById<CheckBox?>(R.id.debugModeCheckbox)
         val orientationButton = findViewById<Button>(R.id.orientationButton)
         val controlsPanel = findViewById<View>(R.id.controlsPanel)
-        val toggleUiButton = findViewById<Button>(R.id.toggleUiButton)
-        val debugOverlayCloseButton = findViewById<Button?>(R.id.debugOverlayCloseButton)
-        val debugOverlayClearButton = findViewById<Button?>(R.id.debugOverlayClearButton)
+        val debugOverlayCloseButton = findViewById<Button>(R.id.debugOverlayCloseButton)
+        val debugOverlayClearButton = findViewById<Button>(R.id.debugOverlayClearButton)
 
         val transportOptions = listOf("USB ADB", "USB Native", "USB AOA", "Wi-Fi")
-        val resolutions = listOf(
-            ResolutionPreset("640x480", 640, 480),
-            ResolutionPreset("1280x720", 1280, 720),
-            ResolutionPreset("1920x1080", 1920, 1080)
-        )
-        val fpsOptions = listOf(
-            FpsPreset("30 FPS", 30),
-            FpsPreset("60 FPS", 60),
+        modeOptions = listOf(
+            CaptureModeOption(CaptureModePreset.LATENCY, getString(R.string.capture_mode_latency)),
+            CaptureModeOption(CaptureModePreset.BALANCED, getString(R.string.capture_mode_balanced)),
+            CaptureModeOption(CaptureModePreset.LOW_LIGHT, getString(R.string.capture_mode_low_light)),
         )
 
-        transportSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, transportOptions)
-        resolutionSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, resolutions)
-        fpsSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, fpsOptions)
-        resolutionSpinner.setSelection(1)
-        val fpsIndex = fpsOptions.indexOfFirst { it.fps == selectedFps }.let { if (it < 0) 1 else it }
-        fpsSpinner.setSelection(fpsIndex)
-        micCheckbox.isChecked = true
-        sleepProtectionCheckbox.isChecked = keepScreenOnWhileStreaming
-        backgroundStreamingCheckbox.isChecked = backgroundStreamingEnabled
+        availableProfiles = CameraSurfacePipeline.enumerateSupportedProfiles(this)
+        transportSpinner?.adapter = buildSpinnerAdapter(transportOptions)
+        captureProfileSpinner?.adapter = buildSpinnerAdapter(availableProfiles)
+        captureModeSpinner?.adapter = buildSpinnerAdapter(modeOptions)
+        val defaultProfile = CameraSurfacePipeline.chooseProfileForRequest(this, 1280, 720, 60)
+        val defaultProfileIndex = availableProfiles.indexOfFirst { it.id == defaultProfile?.id }.let { if (it < 0) 0 else it }
+        if (availableProfiles.isNotEmpty()) {
+            captureProfileSpinner?.setSelection(defaultProfileIndex)
+        }
+        captureModeSpinner?.setSelection(1)
+        micCheckbox?.isChecked = true
+        sleepProtectionCheckbox?.isChecked = keepScreenOnWhileStreaming
+        backgroundStreamingCheckbox?.isChecked = backgroundStreamingEnabled
         debugModeCheckbox?.isChecked = debugModeEnabled
+        torchCheckbox?.isChecked = false
+
+        renderPreviewState(PreviewUiState.IDLE, getString(R.string.preview_hint_default))
+        renderStreamState(StreamUiState.STOPPED, getString(R.string.stream_detail_default))
+        if (availableProfiles.isNotEmpty()) {
+            updateActualProfileText(currentCaptureSpec())
+        } else {
+            renderPreviewState(PreviewUiState.ERROR, getString(R.string.preview_no_profiles))
+            renderStreamState(StreamUiState.ERROR, getString(R.string.preview_no_profiles))
+            start.isEnabled = false
+        }
+        updateTorchAvailability()
         updateOrientationButtonText(orientationButton)
-        applyControlsVisibility(controlsPanel, toggleUiButton)
+        applyControlsVisibility(controlsPanel, toggleUiButton ?: orientationButton)
         applyDebugModeUi()
+        showPreviewSurfaces(idleVisible = true, streamVisible = false)
         if (debugModeEnabled) {
             appendDebugLogLine("file logs: ${AppLog.getLogDirPath()}")
         }
 
         ensurePermissions()
-
-        registerReceiver(usbPermissionReceiver, IntentFilter(ACTION_USB_PERMISSION),
-            Context.RECEIVER_NOT_EXPORTED)
-
-        // Register receiver for ADB-triggered AOA mode entry
-        registerReceiver(aoaEntryReceiver, IntentFilter(ACTION_ENTER_AOA),
-            Context.RECEIVER_EXPORTED)
-
+        registerReceiver(usbPermissionReceiver, IntentFilter(ACTION_USB_PERMISSION), Context.RECEIVER_NOT_EXPORTED)
+        registerReceiver(aoaEntryReceiver, IntentFilter(ACTION_ENTER_AOA), Context.RECEIVER_EXPORTED)
         if (intent?.action == UsbManager.ACTION_USB_ACCESSORY_ATTACHED) {
             handleUsbAccessoryIntent(intent)
         }
         probeExistingUsbAccessory("activity_create", requestPermissionIfNeeded = false)
 
-        sleepProtectionCheckbox.setOnCheckedChangeListener { _, checked ->
+        sleepProtectionCheckbox?.setOnCheckedChangeListener { _, checked ->
             keepScreenOnWhileStreaming = checked
             persistFlags()
             applyKeepScreenOnFlag()
         }
-
-        backgroundStreamingCheckbox.setOnCheckedChangeListener { _, checked ->
+        backgroundStreamingCheckbox?.setOnCheckedChangeListener { _, checked ->
             backgroundStreamingEnabled = checked
             persistFlags()
         }
@@ -181,13 +238,23 @@ class MainActivity : AppCompatActivity() {
                 appendDebugLogLine("file logs: ${AppLog.getLogDirPath()}")
             }
         }
-        debugOverlayCloseButton?.setOnClickListener {
+        torchCheckbox?.setOnCheckedChangeListener { _, _ ->
+            if (!suppressSelectionCallbacks) {
+                updateTorchAvailability()
+                updateActualProfileText(currentCaptureSpec())
+                if (!isStreaming) {
+                    refreshPreviewSpec("torch_toggle")
+                }
+            }
+        }
+
+        debugOverlayCloseButton.setOnClickListener {
             debugModeEnabled = false
             debugModeCheckbox?.isChecked = false
             persistFlags()
             applyDebugModeUi()
         }
-        debugOverlayClearButton?.setOnClickListener {
+        debugOverlayClearButton.setOnClickListener {
             debugLogTextView?.text = ""
         }
 
@@ -196,41 +263,34 @@ class MainActivity : AppCompatActivity() {
             persistFlags()
             applyOrientationLock()
             updateOrientationButtonText(orientationButton)
+            previewController.rebindForRotation("orientation_toggle")
         }
-
-        toggleUiButton.setOnClickListener {
+        toggleUiButton?.setOnClickListener {
             controlsVisible = !controlsVisible
             persistFlags()
-            applyControlsVisibility(controlsPanel, toggleUiButton)
+            applyControlsVisibility(controlsPanel, toggleUiButton ?: orientationButton)
         }
+
+        val selectionListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (suppressSelectionCallbacks) return
+                updateTorchAvailability()
+                updateActualProfileText(currentCaptureSpec())
+                refreshPreviewSpec("selection_changed")
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        captureProfileSpinner?.onItemSelectedListener = selectionListener
+        captureModeSpinner?.onItemSelectedListener = selectionListener
+        suppressSelectionCallbacks = false
 
         start.setOnClickListener {
             ensurePermissions()
-
-            val mode = when (transportSpinner.selectedItemPosition) {
-                0 -> CameraController.TransportMode.USB_ADB
-                1 -> CameraController.TransportMode.USB_NATIVE
-                2 -> CameraController.TransportMode.USB_AOA
-                else -> CameraController.TransportMode.LAN
-            }
-
-            val preset = resolutionSpinner.selectedItem as ResolutionPreset
-            val fpsPreset = fpsSpinner.selectedItem as FpsPreset
-            selectedFps = fpsPreset.fps
-            persistFlags()
-            val receiver = hostInput.text.toString().trim().ifBlank {
-                when (mode) {
-                    CameraController.TransportMode.USB_ADB -> "127.0.0.1:39393"
-                    CameraController.TransportMode.USB_NATIVE -> ""
-                    CameraController.TransportMode.USB_AOA -> ""
-                    CameraController.TransportMode.LAN -> "192.168.1.100:39393"
-                }
-            }
-            val receiverLabel = if (mode == CameraController.TransportMode.USB_NATIVE && receiver.isBlank()) {
-                "auto-detect"
-            } else {
-                receiver
-            }
+            val mode = currentTransportMode()
+            val spec = currentCaptureSpec()
+            val receiver = currentReceiverForMode(mode)
+            val actualProfile = runCatching { CameraSurfacePipeline.prepareCaptureProfile(this, spec) }.getOrNull()
 
             if (mode == CameraController.TransportMode.USB_AOA) {
                 if (backgroundStreamingEnabled) {
@@ -240,34 +300,34 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
+            previewController.stop("stream_start")
+            showPreviewSurfaces(idleVisible = false, streamVisible = !backgroundStreamingEnabled)
+            isStreaming = true
+            if (actualProfile != null) {
+                updateActualProfileText(actualProfile.actualLabel, spec.mode, actualProfile.torchEnabled)
+            } else {
+                updateActualProfileText(spec)
+            }
+            renderPreviewState(
+                if (backgroundStreamingEnabled) PreviewUiState.PAUSED else PreviewUiState.READY,
+                if (backgroundStreamingEnabled) getString(R.string.preview_hint_background) else getString(R.string.preview_hint_streaming_live),
+            )
+            renderStreamState(StreamUiState.CONNECTING, "Starting ${spec.displayLabel}")
+
             if (backgroundStreamingEnabled) {
                 controller.stop()
-                startBackgroundStreaming(
-                    transport = mode,
-                    receiver = receiver,
-                    width = preset.width,
-                    height = preset.height,
-                    pushMic = micCheckbox.isChecked,
-                )
+                startBackgroundStreaming(mode, receiver, spec, micCheckbox?.isChecked == true)
             } else {
                 stopBackgroundStreaming()
                 controller.start(
                     transport = mode,
                     receiverAddress = receiver,
-                    width = preset.width,
-                    height = preset.height,
-                    fps = selectedFps,
-                    bitrate = computeBitrate(preset.width, selectedFps),
-                    pushMic = micCheckbox.isChecked,
+                    captureSpec = spec,
+                    streamPreviewView = streamPreviewView,
+                    pushMic = micCheckbox?.isChecked == true,
                 )
             }
-            isStreaming = true
             applyKeepScreenOnFlag()
-            status.text = if (backgroundStreamingEnabled) {
-                getString(R.string.status_streaming_bg, preset.label, receiverLabel)
-            } else {
-                getString(R.string.status_streaming, preset.label, receiverLabel)
-            }
         }
 
         stop.setOnClickListener {
@@ -275,8 +335,9 @@ class MainActivity : AppCompatActivity() {
             releaseUsbAccessoryTransport("stop_button")
             stopBackgroundStreaming()
             isStreaming = false
+            renderStreamState(StreamUiState.STOPPED, "Stream stopped")
+            bindPreviewIfPossible("stop_button")
             applyKeepScreenOnFlag()
-            status.text = getString(R.string.status_stopped)
         }
     }
 
@@ -288,24 +349,38 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
+        previewController.stop("activity_destroy")
+        controller.stop()
         releaseUsbAccessoryTransport("activity_destroy")
-        try { unregisterReceiver(usbPermissionReceiver) } catch (_: Exception) {}
-        try { unregisterReceiver(aoaEntryReceiver) } catch (_: Exception) {}
+        try {
+            unregisterReceiver(usbPermissionReceiver)
+        } catch (_: Exception) {
+        }
+        try {
+            unregisterReceiver(aoaEntryReceiver)
+        } catch (_: Exception) {
+        }
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        super.onDestroy()
     }
 
     override fun onStart() {
         super.onStart()
+        isActivityVisible = true
         val filter = IntentFilter(StreamingService.ACTION_STATUS)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(streamingStatusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(streamingStatusReceiver, filter)
         }
+        bindPreviewIfPossible("activity_start")
     }
 
     override fun onStop() {
+        isActivityVisible = false
+        if (!isStreaming) {
+            previewController.stop("activity_stop")
+        }
         try {
             unregisterReceiver(streamingStatusReceiver)
         } catch (_: Throwable) {
@@ -319,8 +394,123 @@ class MainActivity : AppCompatActivity() {
         outState.putBoolean(KEY_BACKGROUND_STREAMING, backgroundStreamingEnabled)
         outState.putBoolean(KEY_CONTROLS_VISIBLE, controlsVisible)
         outState.putBoolean(KEY_DEBUG_MODE, debugModeEnabled)
-        outState.putInt(KEY_FPS, selectedFps)
         super.onSaveInstanceState(outState)
+    }
+
+    private fun bindPreviewIfPossible(reason: String) {
+        if (!isActivityVisible) return
+        if (isStreaming) {
+            showPreviewSurfaces(idleVisible = false, streamVisible = !backgroundStreamingEnabled)
+            previewDetailTextView?.text =
+                if (backgroundStreamingEnabled) getString(R.string.preview_hint_background) else getString(R.string.preview_hint_streaming_live)
+            return
+        }
+        if (!hasCameraPermission()) {
+            renderPreviewState(PreviewUiState.ERROR, getString(R.string.preview_permission_required))
+            return
+        }
+        if (availableProfiles.isEmpty()) {
+            renderPreviewState(PreviewUiState.ERROR, getString(R.string.preview_no_profiles))
+            return
+        }
+        val spec = currentCaptureSpec()
+        showPreviewSurfaces(idleVisible = true, streamVisible = false)
+        updateTorchAvailability()
+        updateActualProfileText(spec)
+        previewController.updateSpec(spec, "spec_$reason")
+        previewController.start(reason)
+    }
+
+    private fun refreshPreviewSpec(reason: String) {
+        if (!isStreaming) {
+            bindPreviewIfPossible(reason)
+        }
+    }
+
+    private fun currentCaptureSpec(): CaptureSpec {
+        val profile = availableProfiles.getOrNull(captureProfileSpinner?.selectedItemPosition ?: 0)
+            ?: CameraSurfacePipeline.chooseProfileForRequest(this, 1280, 720, 30)
+            ?: throw IllegalStateException("No capture profiles available")
+        val mode = modeOptions.getOrNull(captureModeSpinner?.selectedItemPosition ?: 1)?.preset
+            ?: CaptureModePreset.BALANCED
+        val torchEnabled = torchCheckbox?.isChecked == true && profile.supportsTorch
+        return CaptureSpec(profile = profile, mode = mode, torchEnabled = torchEnabled)
+    }
+
+    private fun currentTransportMode(): CameraController.TransportMode {
+        return when (transportSpinner?.selectedItemPosition ?: 0) {
+            0 -> CameraController.TransportMode.USB_ADB
+            1 -> CameraController.TransportMode.USB_NATIVE
+            2 -> CameraController.TransportMode.USB_AOA
+            else -> CameraController.TransportMode.LAN
+        }
+    }
+
+    private fun currentReceiverForMode(mode: CameraController.TransportMode): String {
+        val input = hostInput?.text?.toString()?.trim().orEmpty()
+        return input.ifBlank {
+            when (mode) {
+                CameraController.TransportMode.USB_ADB -> "127.0.0.1:39393"
+                CameraController.TransportMode.USB_NATIVE -> ""
+                CameraController.TransportMode.USB_AOA -> ""
+                CameraController.TransportMode.LAN -> "192.168.1.100:39393"
+            }
+        }
+    }
+
+    private fun renderPreviewState(state: PreviewUiState, detail: String) {
+        previewStateTextView?.text = when (state) {
+            PreviewUiState.IDLE -> getString(R.string.preview_state_idle)
+            PreviewUiState.STARTING -> getString(R.string.preview_state_starting)
+            PreviewUiState.READY -> getString(R.string.preview_state_ready)
+            PreviewUiState.PAUSED -> getString(R.string.preview_state_paused)
+            PreviewUiState.ERROR -> getString(R.string.preview_state_error)
+        }
+        previewDetailTextView?.text = detail
+    }
+
+    private fun renderStreamState(state: StreamUiState, detail: String) {
+        streamStateTextView?.text = when (state) {
+            StreamUiState.IDLE -> getString(R.string.stream_state_idle)
+            StreamUiState.CONNECTING -> getString(R.string.stream_state_connecting)
+            StreamUiState.STREAMING -> getString(R.string.stream_state_streaming)
+            StreamUiState.STOPPED -> getString(R.string.stream_state_stopped)
+            StreamUiState.ERROR -> getString(R.string.stream_state_error)
+        }
+        statusTextView?.text = detail
+    }
+
+    private fun updateActualProfileText(spec: CaptureSpec) {
+        updateActualProfileText(spec.profile.displayLabel, spec.mode, spec.torchEnabled)
+    }
+
+    private fun updateActualProfileText(profileLabel: String, mode: CaptureModePreset, torchEnabled: Boolean) {
+        actualProfileTextView?.text = getString(
+            R.string.actual_profile_format,
+            profileLabel,
+            when (mode) {
+                CaptureModePreset.LATENCY -> getString(R.string.capture_mode_latency)
+                CaptureModePreset.BALANCED -> getString(R.string.capture_mode_balanced)
+                CaptureModePreset.LOW_LIGHT -> getString(R.string.capture_mode_low_light)
+            },
+            if (torchEnabled) getString(R.string.torch_state_on) else getString(R.string.torch_state_off),
+        )
+    }
+
+    private fun updateTorchAvailability() {
+        val profile = availableProfiles.getOrNull(captureProfileSpinner?.selectedItemPosition ?: 0)
+        val available = profile?.supportsTorch == true
+        torchCheckbox?.isEnabled = available
+        if (!available) {
+            suppressSelectionCallbacks = true
+            torchCheckbox?.isChecked = false
+            suppressSelectionCallbacks = false
+        }
+    }
+
+    private fun showPreviewSurfaces(idleVisible: Boolean, streamVisible: Boolean) {
+        idlePreviewView?.visibility = if (idleVisible) View.VISIBLE else View.GONE
+        streamPreviewView?.visibility = if (streamVisible) View.VISIBLE else View.GONE
     }
 
     private fun applyOrientationLock() {
@@ -347,15 +537,13 @@ class MainActivity : AppCompatActivity() {
             .putBoolean(KEY_BACKGROUND_STREAMING, backgroundStreamingEnabled)
             .putBoolean(KEY_CONTROLS_VISIBLE, controlsVisible)
             .putBoolean(KEY_DEBUG_MODE, debugModeEnabled)
-            .putInt(KEY_FPS, selectedFps)
             .apply()
     }
 
     private fun startBackgroundStreaming(
         transport: CameraController.TransportMode,
         receiver: String,
-        width: Int,
-        height: Int,
+        spec: CaptureSpec,
         pushMic: Boolean,
     ) {
         val intent = Intent(this, StreamingService::class.java).apply {
@@ -370,11 +558,14 @@ class MainActivity : AppCompatActivity() {
                 },
             )
             putExtra(StreamingService.EXTRA_RECEIVER, receiver)
-            putExtra(StreamingService.EXTRA_WIDTH, width)
-            putExtra(StreamingService.EXTRA_HEIGHT, height)
-            putExtra(StreamingService.EXTRA_FPS, selectedFps)
-            putExtra(StreamingService.EXTRA_BITRATE, computeBitrate(width, selectedFps))
+            putExtra(StreamingService.EXTRA_WIDTH, spec.profile.width)
+            putExtra(StreamingService.EXTRA_HEIGHT, spec.profile.height)
+            putExtra(StreamingService.EXTRA_FPS, spec.profile.targetFps)
+            putExtra(StreamingService.EXTRA_BITRATE, spec.profile.recommendedBitrate)
             putExtra(StreamingService.EXTRA_PUSH_MIC, pushMic)
+            putExtra(StreamingService.EXTRA_CAPTURE_MODE, spec.mode.name)
+            putExtra(StreamingService.EXTRA_TORCH_ENABLED, spec.torchEnabled)
+            putExtra(StreamingService.EXTRA_CAMERA_ID, spec.profile.cameraId)
         }
         ContextCompat.startForegroundService(this, intent)
     }
@@ -386,21 +577,13 @@ class MainActivity : AppCompatActivity() {
         startService(intent)
     }
 
-    private fun applyControlsVisibility(panel: View, toggleButton: Button) {
+    private fun applyControlsVisibility(panel: View, button: Button) {
         panel.visibility = if (controlsVisible) View.VISIBLE else View.GONE
-        toggleButton.text = if (controlsVisible) {
-            getString(R.string.btn_hide_controls)
-        } else {
-            getString(R.string.btn_show_controls)
-        }
+        button.text = if (controlsVisible) getString(R.string.btn_hide_controls) else getString(R.string.btn_show_controls)
     }
 
     private fun updateOrientationButtonText(button: Button) {
-        button.text = if (isLandscapeLocked) {
-            getString(R.string.btn_orientation_landscape_on)
-        } else {
-            getString(R.string.btn_orientation_landscape_off)
-        }
+        button.text = if (isLandscapeLocked) getString(R.string.btn_orientation_landscape_on) else getString(R.string.btn_orientation_landscape_off)
     }
 
     private fun appendDebugLogLine(message: String) {
@@ -408,19 +591,21 @@ class MainActivity : AppCompatActivity() {
         val line = "[${timeFmt.format(Date())}] $message"
         val prev = tv.text?.toString().orEmpty()
         tv.text = if (prev.isBlank()) line else "$prev\n$line"
-        debugLogScrollView?.post {
-            debugLogScrollView?.fullScroll(View.FOCUS_DOWN)
-        }
+        debugLogScrollView?.post { debugLogScrollView?.fullScroll(View.FOCUS_DOWN) }
     }
 
     private fun applyDebugModeUi() {
         debugOverlayView?.visibility = if (debugModeEnabled) View.VISIBLE else View.GONE
     }
 
+    private fun hasCameraPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    }
+
     private val usbPermissionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == ACTION_USB_PERMISSION) {
-                val accessory: UsbAccessory? = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                val accessory: UsbAccessory? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY, UsbAccessory::class.java)
                 } else {
                     @Suppress("DEPRECATION")
@@ -436,9 +621,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Receiver for ADB-triggered AOA mode: Windows sends this broadcast via
-    // "adb shell am broadcast" when it can't open the device directly (driver lock).
-    // We check if a USB accessory is already available and open it.
     private val aoaEntryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == ACTION_ENTER_AOA) {
@@ -446,7 +628,7 @@ class MainActivity : AppCompatActivity() {
                 val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
                 val accessories = usbManager.accessoryList
                 if (accessories != null && accessories.isNotEmpty()) {
-                    handleUsbAccessoryIntent(android.content.Intent().apply {
+                    handleUsbAccessoryIntent(Intent().apply {
                         putExtra(UsbManager.EXTRA_ACCESSORY, accessories[0])
                     })
                 } else {
@@ -457,7 +639,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleUsbAccessoryIntent(intent: Intent) {
-        val accessory: UsbAccessory? = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        val accessory: UsbAccessory? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY, UsbAccessory::class.java)
         } else {
             @Suppress("DEPRECATION")
@@ -469,13 +651,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun probeExistingUsbAccessory(reason: String, requestPermissionIfNeeded: Boolean = true): Boolean {
         val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
-        val accessory = usbManager.accessoryList?.firstOrNull()
-        if (accessory == null) {
-            AppLog.d("MainActivity", "No USB accessory present reason=$reason")
-            return false
-        }
+        val accessory = usbManager.accessoryList?.firstOrNull() ?: return false
         if (!requestPermissionIfNeeded && !usbManager.hasPermission(accessory)) {
-            AppLog.i("MainActivity", "USB accessory detected without permission reason=$reason ${accessorySummary(accessory)}")
             return false
         }
         handleUsbAccessory(accessory, reason)
@@ -491,8 +668,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             pendingAccessory = accessory
             AppLog.i("MainActivity", "Requesting USB accessory permission reason=$reason $summary")
-            val pi = PendingIntent.getBroadcast(this, 0,
-                Intent(ACTION_USB_PERMISSION), PendingIntent.FLAG_IMMUTABLE)
+            val pi = PendingIntent.getBroadcast(this, 0, Intent(ACTION_USB_PERMISSION), PendingIntent.FLAG_IMMUTABLE)
             usbManager.requestPermission(accessory, pi)
         }
     }
@@ -507,7 +683,7 @@ class MainActivity : AppCompatActivity() {
         releaseUsbAccessoryTransport("reopen_for_$reason")
         val transport = UsbAccessoryTransport(this) { msg ->
             runOnUiThread {
-                appendDebugLogLine(msg)
+                if (debugModeEnabled) appendDebugLogLine(msg)
             }
         }
         if (transport.open(accessory)) {
@@ -531,25 +707,24 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun accessorySummary(accessory: UsbAccessory): String {
-        val manufacturer = accessory.manufacturer ?: "unknown"
-        val model = accessory.model ?: "unknown"
-        val version = accessory.version ?: "unknown"
+        val manufacturer = accessory.manufacturer?.takeIf { it.isNotBlank() } ?: "unknown"
+        val model = accessory.model?.takeIf { it.isNotBlank() } ?: "unknown"
+        val version = accessory.version?.takeIf { it.isNotBlank() } ?: "unknown"
         return "manufacturer=$manufacturer model=$model version=$version"
     }
 
     private fun ensurePermissions() {
         val needCamera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
         val needAudio = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
-
         if (needCamera || needAudio) {
             permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
         }
     }
 
-    private fun computeBitrate(width: Int, fps: Int): Int = when {
-        width >= 1920 -> if (fps >= 60) 15_000_000 else 10_000_000
-        width >= 1280 -> if (fps >= 60)  8_000_000 else  5_000_000
-        else          -> if (fps >= 60)  3_000_000 else  2_000_000
+    private fun <T> buildSpinnerAdapter(items: List<T>): ArrayAdapter<T> {
+        return ArrayAdapter(this, R.layout.spinner_item, items).apply {
+            setDropDownViewResource(R.layout.spinner_dropdown_item)
+        }
     }
 
     companion object {
@@ -561,6 +736,5 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_BACKGROUND_STREAMING = "background_streaming"
         private const val KEY_CONTROLS_VISIBLE = "controls_visible"
         private const val KEY_DEBUG_MODE = "debug_mode"
-        private const val KEY_FPS = "fps"
     }
 }
