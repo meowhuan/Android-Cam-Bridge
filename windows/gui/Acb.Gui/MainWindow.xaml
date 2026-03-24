@@ -22,7 +22,7 @@
                 </ComboBox>
 
                 <TextBlock x:Name="ReceiverUrlLabelText" Text="Receiver URL" Opacity="0.75" />
-                <TextBox x:Name="ReceiverAddressBox" Text="http://127.0.0.1:39393" PlaceholderText="receiver address" />
+                <TextBox x:Name="ReceiverAddressBox" Text="http://127.0.0.1:39393" PlaceholderText="receiver address" TextChanged="OnReceiverAddressChanged" />
 
                 <Grid ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
@@ -151,6 +151,32 @@
                             <Button Grid.Column="1" x:Name="UsbAoaDisconnectButton" Content="AOA Disconnect" Click="OnUsbAoaDisconnect" />
                         </Grid>
                         <TextBox x:Name="UsbAoaStatusBox" IsReadOnly="True" TextWrapping="Wrap" PlaceholderText="usb-aoa status" />
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="VirtualCamPanel" BorderThickness="1" BorderBrush="#33FFFFFF" CornerRadius="8" Padding="8">
+                    <StackPanel Spacing="6">
+                        <TextBlock x:Name="VirtualCamPanelTitleText" Text="Virtual Camera" FontWeight="SemiBold" />
+                        <CheckBox x:Name="VirtualCamAutoStartBox" IsChecked="True" Content="Start virtual camera with session" />
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="110" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="VirtualCamReceiverBox" Grid.Column="0" PlaceholderText="virtual camera receiver host:port" TextChanged="OnVirtualCamReceiverChanged" />
+                            <TextBox x:Name="VirtualCamIntervalBox" Grid.Column="1" Text="16" PlaceholderText="interval ms" />
+                        </Grid>
+                        <Grid ColumnSpacing="6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0" x:Name="VirtualCamStartButton" Content="Start Virtual Camera" Click="OnStartVirtualCam" />
+                            <Button Grid.Column="1" x:Name="VirtualCamStopButton" Content="Stop Virtual Camera" Click="OnStopVirtualCam" />
+                            <Button Grid.Column="2" x:Name="VirtualCamStatusButton" Content="Refresh Status" Click="OnRefreshVirtualCamStatus" />
+                        </Grid>
+                        <TextBox x:Name="VirtualCamStatusBox" IsReadOnly="True" TextWrapping="Wrap" PlaceholderText="virtual camera status" />
                     </StackPanel>
                 </Border>
 

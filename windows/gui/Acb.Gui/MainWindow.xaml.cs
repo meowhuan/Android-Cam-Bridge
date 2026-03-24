@@ -2,13 +2,16 @@ using Acb.Gui.Services;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.IO.Pipes;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Windows.Graphics;
 using WinRT.Interop;
@@ -21,13 +24,19 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherTimer _statsTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private readonly DispatcherTimer _usbNativeTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private readonly DispatcherTimer _usbAoaTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+    private readonly DispatcherTimer _virtualCamTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private bool _autoRefreshEnabled;
     private bool _usbNativeRefreshInProgress;
     private int _usbNativeTickCount;
     private bool _usbAoaRefreshInProgress;
+    private bool _virtualCamRefreshInProgress;
     private Process? _receiverProcess;
     private bool _receiverStartedByGui;
+    private Process? _virtualCamBridgeProcess;
+    private bool _virtualCamStartedByGui;
+    private bool _virtualCamReceiverOverrideActive;
     private bool _uiInitialized;
+    private const string VirtualCamPipeName = "acb-virtualcam-control";
 
     public MainWindow()
     {
@@ -38,10 +47,46 @@ public sealed partial class MainWindow : Window
         _usbNativeTimer.Start();
         _usbAoaTimer.Tick += OnUsbAoaTimerTick;
         _usbAoaTimer.Start();
+        _virtualCamTimer.Tick += OnVirtualCamTimerTick;
+        _virtualCamTimer.Start();
         Closed += OnWindowClosed;
+        AppLogger.LineWritten += OnAppLogLineWritten;
         _uiInitialized = true;
+        VirtualCamReceiverBox.Text = NormalizeReceiverForVirtualCam(ReceiverAddressBox.Text);
         ApplyLanguage();
+        if (!string.IsNullOrWhiteSpace(AppLogger.LogFilePath))
+        {
+            AppendOutput(AppLogger.LogFilePath!, "gui log");
+        }
         AppLogger.Info("main window initialized");
+    }
+
+    private void OnReceiverAddressChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_uiInitialized || _virtualCamReceiverOverrideActive)
+        {
+            return;
+        }
+
+        var normalized = NormalizeReceiverForVirtualCam(ReceiverAddressBox.Text);
+        if (!string.Equals(VirtualCamReceiverBox.Text, normalized, StringComparison.OrdinalIgnoreCase))
+        {
+            VirtualCamReceiverBox.Text = normalized;
+        }
+    }
+
+    private void OnVirtualCamReceiverChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_uiInitialized)
+        {
+            return;
+        }
+
+        var receiver = NormalizeReceiverForVirtualCam(ReceiverAddressBox.Text);
+        var virtualCamReceiver = NormalizeReceiverForVirtualCam(VirtualCamReceiverBox.Text);
+        _virtualCamReceiverOverrideActive =
+            !string.IsNullOrWhiteSpace(virtualCamReceiver) &&
+            !string.Equals(receiver, virtualCamReceiver, StringComparison.OrdinalIgnoreCase);
     }
 
     private async void OnSetupAdb(object sender, RoutedEventArgs e)
@@ -164,6 +209,10 @@ public sealed partial class MainWindow : Window
             if (transport == "usb-aoa")
             {
                 await RefreshUsbAoaStatusAsync();
+            }
+            if (VirtualCamAutoStartBox.IsChecked ?? true)
+            {
+                await StartVirtualCamAsync();
             }
         }
         catch (Exception ex)
@@ -331,6 +380,37 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void OnStartVirtualCam(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await StartVirtualCamAsync();
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("start virtual camera failed", ex);
+            AppendError(ex);
+        }
+    }
+
+    private async void OnStopVirtualCam(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await StopVirtualCamAsync(false);
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("stop virtual camera failed", ex);
+            AppendError(ex);
+        }
+    }
+
+    private async void OnRefreshVirtualCamStatus(object sender, RoutedEventArgs e)
+    {
+        await RefreshVirtualCamStatusAsync(true);
+    }
+
     private async void OnTransportChanged(object sender, SelectionChangedEventArgs e)
     {
         UpdateUsbNativePanelVisibility();
@@ -345,6 +425,12 @@ public sealed partial class MainWindow : Window
         {
             await RefreshUsbAoaStatusAsync(false);
         }
+    }
+
+    private async void OnVirtualCamTimerTick(object? sender, object e)
+    {
+        if (_virtualCamRefreshInProgress) return;
+        await RefreshVirtualCamStatusAsync(false);
     }
 
     private async void OnUsbNativeTimerTick(object? sender, object e)
@@ -399,6 +485,182 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async Task StartVirtualCamAsync()
+    {
+        await EnsureReceiverReadyAsync();
+        await EnsureVirtualCamBridgeReadyAsync();
+
+        var receiver = NormalizeReceiverForVirtualCam(VirtualCamReceiverBox.Text);
+        if (string.IsNullOrWhiteSpace(receiver))
+        {
+            receiver = NormalizeReceiverForVirtualCam(ReceiverAddressBox.Text);
+        }
+        if (string.IsNullOrWhiteSpace(receiver))
+        {
+            receiver = "127.0.0.1:39393";
+        }
+
+        var intervalMs = ParseInt(VirtualCamIntervalBox.Text, 16);
+        intervalMs = Math.Clamp(intervalMs, 5, 1000);
+        VirtualCamReceiverBox.Text = receiver;
+        VirtualCamIntervalBox.Text = intervalMs.ToString(CultureInfo.InvariantCulture);
+
+        await SendVirtualCamCommandAsync($"SET_RECEIVER {receiver}");
+        await SendVirtualCamCommandAsync($"SET_INTERVAL {intervalMs}");
+        var response = await SendVirtualCamCommandAsync("START");
+        VirtualCamStatusBox.Text = response;
+        AppendOutput($"{response}{Environment.NewLine}receiver={receiver} interval={intervalMs}ms", "virtualcam");
+        AppLogger.Info($"virtual camera started receiver={receiver} intervalMs={intervalMs}");
+        await RefreshVirtualCamStatusAsync(false);
+    }
+
+    private async Task StopVirtualCamAsync(bool exitBridge)
+    {
+        string response;
+        try
+        {
+            response = await SendVirtualCamCommandAsync(exitBridge ? "EXIT" : "STOP");
+        }
+        catch (Exception ex)
+        {
+            if (!exitBridge)
+            {
+                throw;
+            }
+
+            AppLogger.Error("virtual camera bridge stop on exit failed", ex);
+            response = "virtual camera bridge already stopped";
+        }
+
+        VirtualCamStatusBox.Text = response;
+        AppendOutput(response, "virtualcam");
+        AppLogger.Info(exitBridge ? "virtual camera bridge exited" : "virtual camera stopped");
+
+        if (exitBridge && _virtualCamBridgeProcess != null)
+        {
+            try
+            {
+                if (!_virtualCamBridgeProcess.HasExited)
+                {
+                    _virtualCamBridgeProcess.WaitForExit(1500);
+                }
+            }
+            catch
+            {
+                // Ignore shutdown race.
+            }
+
+            _virtualCamBridgeProcess.Dispose();
+            _virtualCamBridgeProcess = null;
+            _virtualCamStartedByGui = false;
+        }
+    }
+
+    private async Task RefreshVirtualCamStatusAsync(bool appendOutput)
+    {
+        if (!appendOutput &&
+            !_virtualCamStartedByGui &&
+            !Process.GetProcessesByName("acb-virtualcam-bridge").Any())
+        {
+            return;
+        }
+
+        try
+        {
+            _virtualCamRefreshInProgress = true;
+            var response = await SendVirtualCamCommandAsync("STATUS");
+            VirtualCamStatusBox.Text = response;
+            if (appendOutput)
+            {
+                AppendOutput(response, "virtualcam");
+            }
+        }
+        catch (Exception ex)
+        {
+            VirtualCamStatusBox.Text = IsZh() ? "虚拟摄像头桥接未运行" : "virtual camera bridge is not running";
+            if (appendOutput)
+            {
+                AppendOutput($"{ex.GetType().Name}: {ex.Message}", "virtualcam");
+            }
+        }
+        finally
+        {
+            _virtualCamRefreshInProgress = false;
+        }
+    }
+
+    private async Task EnsureVirtualCamBridgeReadyAsync()
+    {
+        if (Process.GetProcessesByName("acb-virtualcam-bridge").Any())
+        {
+            return;
+        }
+
+        var exe = ResolveVirtualCamBridgePath();
+        if (exe == null)
+        {
+            throw new FileNotFoundException(IsZh() ? "未找到虚拟摄像头桥接程序。" : "virtual camera bridge executable not found.");
+        }
+
+        _virtualCamBridgeProcess = Process.Start(new ProcessStartInfo
+        {
+            FileName = exe,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden,
+            WorkingDirectory = Path.GetDirectoryName(exe) ?? Environment.CurrentDirectory
+        });
+        _virtualCamStartedByGui = _virtualCamBridgeProcess != null;
+        await Task.Delay(500);
+    }
+
+    private static async Task<string> SendVirtualCamCommandAsync(string command)
+    {
+        using var pipe = new NamedPipeClientStream(".", VirtualCamPipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        await pipe.ConnectAsync(cts.Token);
+
+        using var writer = new StreamWriter(pipe, Encoding.UTF8, leaveOpen: true) { AutoFlush = true };
+        using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+        await writer.WriteLineAsync(command);
+        var response = await reader.ReadLineAsync(cts.Token);
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            throw new IOException("No response from virtual camera bridge.");
+        }
+        return response;
+    }
+
+    private static string NormalizeReceiverForVirtualCam(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        if (Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri))
+        {
+            var port = uri.IsDefaultPort ? 39393 : uri.Port;
+            return $"{uri.Host}:{port}";
+        }
+
+        var trimmed = value.Trim();
+        return trimmed.Contains("://", StringComparison.Ordinal) ? string.Empty : trimmed;
+    }
+
+    private static string? ResolveVirtualCamBridgePath()
+    {
+        var baseDir = AppContext.BaseDirectory;
+        var candidates = new[]
+        {
+            Path.Combine(baseDir, "acb-virtualcam-bridge.exe"),
+            Path.Combine(baseDir, "virtualcam-bridge", "acb-virtualcam-bridge.exe"),
+            Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "..", "..", "build", "windows", "virtualcam-bridge", "Release", "acb-virtualcam-bridge.exe"))
+        };
+
+        return candidates.FirstOrDefault(File.Exists);
+    }
+
     private void OnWindowClosed(object sender, WindowEventArgs args)
     {
         try
@@ -406,6 +668,12 @@ public sealed partial class MainWindow : Window
             _statsTimer.Stop();
             _usbNativeTimer.Stop();
             _usbAoaTimer.Stop();
+            _virtualCamTimer.Stop();
+            AppLogger.LineWritten -= OnAppLogLineWritten;
+            if (_virtualCamStartedByGui)
+            {
+                StopVirtualCamAsync(true).GetAwaiter().GetResult();
+            }
             if ((AutoStopReceiverBox.IsChecked ?? true) && _receiverStartedByGui && _receiverProcess is { HasExited: false })
             {
                 _receiverProcess.Kill(true);
@@ -518,6 +786,7 @@ public sealed partial class MainWindow : Window
         BitrateLabelText.Text = zh ? "视频码率" : "Bitrate";
         UsbNativePanelTitleText.Text = zh ? "USB Native 面板" : "USB Native Panel";
         UsbAoaPanelTitleText.Text = zh ? "USB AOA 面板" : "USB AOA Panel";
+        VirtualCamPanelTitleText.Text = zh ? "虚拟摄像头" : "Virtual Camera";
         ReceiverAddressBox.PlaceholderText = zh ? "Receiver 地址" : "receiver address";
         BitrateBox.PlaceholderText = zh ? "视频码率 bps" : "video bitrate bps";
         SessionIdBox.PlaceholderText = "session id";
@@ -525,6 +794,9 @@ public sealed partial class MainWindow : Window
         UsbNativeStatusBox.PlaceholderText = zh ? "usb-native 状态" : "usb-native status";
         UsbNativeLinkBox.PlaceholderText = zh ? "usb-native 链路" : "usb-native link";
         UsbAoaStatusBox.PlaceholderText = zh ? "usb-aoa 状态" : "usb-aoa status";
+        VirtualCamReceiverBox.PlaceholderText = zh ? "虚拟摄像头拉流地址 host:port" : "virtual camera receiver host:port";
+        VirtualCamIntervalBox.PlaceholderText = zh ? "轮询间隔 ms" : "interval ms";
+        VirtualCamStatusBox.PlaceholderText = zh ? "虚拟摄像头状态" : "virtual camera status";
 
         ConnectionModeManagedItem.Content = zh ? "托管（自动）" : "Managed";
         ConnectionModeAttachItem.Content = zh ? "附加（仅连接）" : "Attach";
@@ -551,6 +823,10 @@ public sealed partial class MainWindow : Window
         RefreshUsbNativeLinkButton.Content = zh ? "刷新链路" : "Refresh Link";
         UsbAoaConnectButton.Content = zh ? "AOA 连接" : "AOA Connect";
         UsbAoaDisconnectButton.Content = zh ? "AOA 断开" : "AOA Disconnect";
+        VirtualCamAutoStartBox.Content = zh ? "会话启动时同时开启虚拟摄像头" : "Start virtual camera with session";
+        VirtualCamStartButton.Content = zh ? "启动虚拟摄像头" : "Start Virtual Camera";
+        VirtualCamStopButton.Content = zh ? "停止虚拟摄像头" : "Stop Virtual Camera";
+        VirtualCamStatusButton.Content = zh ? "刷新状态" : "Refresh Status";
         AutoRefreshButton.Content = _autoRefreshEnabled
             ? (zh ? "关闭自动刷新（5秒）" : "Disable Auto Refresh (5s)")
             : (zh ? "开启自动刷新（5秒）" : "Auto Refresh Stats (5s)");
@@ -600,6 +876,24 @@ public sealed partial class MainWindow : Window
         return json.Substring(start, end - start);
     }
 
+    private void OnAppLogLineWritten(string line)
+    {
+        if (!_uiInitialized || string.IsNullOrWhiteSpace(line))
+        {
+            return;
+        }
+
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (!_uiInitialized || OutputBox == null)
+            {
+                return;
+            }
+
+            AppendTextEntry(line.TrimEnd(), alreadyFormatted: true);
+        });
+    }
+
     private void AppendOutput(string message, string? tag = null)
     {
         if (string.IsNullOrWhiteSpace(message)) return;
@@ -609,17 +903,61 @@ public sealed partial class MainWindow : Window
             prefix += $" [{tag}]";
         }
 
-        if (!string.IsNullOrWhiteSpace(OutputBox.Text))
-        {
-            OutputBox.Text += Environment.NewLine + Environment.NewLine;
-        }
-        OutputBox.Text += prefix + Environment.NewLine + message.Trim();
-        OutputBox.SelectionStart = OutputBox.Text.Length;
+        AppendTextEntry(prefix + Environment.NewLine + message.Trim(), alreadyFormatted: true);
     }
 
     private void AppendError(Exception ex)
     {
         AppendOutput($"{ex.GetType().Name}: {ex.Message}", "error");
+    }
+
+    private void AppendTextEntry(string text, bool alreadyFormatted)
+    {
+        if (OutputBox == null || string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(OutputBox.Text))
+        {
+            OutputBox.Text += Environment.NewLine + Environment.NewLine;
+        }
+        OutputBox.Text += alreadyFormatted ? text : text.Trim();
+        ScrollOutputToEnd();
+    }
+
+    private void ScrollOutputToEnd()
+    {
+        if (OutputBox == null)
+        {
+            return;
+        }
+
+        OutputBox.SelectionStart = OutputBox.Text.Length;
+        OutputBox.SelectionLength = 0;
+        OutputBox.UpdateLayout();
+        var scrollViewer = FindDescendantScrollViewer(OutputBox);
+        scrollViewer?.ChangeView(null, scrollViewer.ScrollableHeight, null, true);
+    }
+
+    private static ScrollViewer? FindDescendantScrollViewer(DependencyObject root)
+    {
+        if (root is ScrollViewer scrollViewer)
+        {
+            return scrollViewer;
+        }
+
+        var childCount = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < childCount; i++)
+        {
+            var match = FindDescendantScrollViewer(VisualTreeHelper.GetChild(root, i));
+            if (match != null)
+            {
+                return match;
+            }
+        }
+
+        return null;
     }
 
     private void UpdateUsbNativePanelVisibility()

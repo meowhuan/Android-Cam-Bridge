@@ -6,6 +6,9 @@ internal static class AppLogger
 {
     private static readonly object Sync = new();
     private static string? _logFilePath;
+    public static event Action<string>? LineWritten;
+
+    public static string? LogFilePath => _logFilePath;
 
     public static string Initialize()
     {
@@ -46,5 +49,7 @@ internal static class AppLogger
         {
             File.AppendAllText(_logFilePath, line + Environment.NewLine, Encoding.UTF8);
         }
+
+        LineWritten?.Invoke(line.ToString());
     }
 }
