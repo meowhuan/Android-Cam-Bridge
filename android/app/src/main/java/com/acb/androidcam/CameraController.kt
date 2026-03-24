@@ -3,32 +3,18 @@ package com.acb.androidcam
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.graphics.ImageFormat
-import android.graphics.Rect
-import android.graphics.YuvImage
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
-import android.util.Log
-import android.util.Range
-import androidx.camera.camera2.interop.Camera2Interop
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
-import androidx.camera.core.UseCaseGroup
-import androidx.camera.core.ViewPort
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
-import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import android.view.TextureView
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -37,18 +23,18 @@ import kotlin.math.min
 class CameraController(
     private val context: Context,
     private val lifecycleOwner: LifecycleOwner,
-    private val previewView: PreviewView?,
+    private val previewView: TextureView?,
     private val onDebugEvent: ((String) -> Unit)? = null,
 ) {
     enum class TransportMode { LAN, USB_ADB, USB_NATIVE, USB_AOA }
 
-    private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val uploadExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val audioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val sessionExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val running = AtomicBoolean(false)
     private val micRunning = AtomicBoolean(false)
     private val sessionLoopRunning = AtomicBoolean(false)
+    private val cameraPipeline = CameraSurfacePipeline(context, previewView)
 
     private var currentMode: TransportMode = TransportMode.USB_ADB
     private var currentReceiver = "127.0.0.1:39393"
@@ -78,13 +64,33 @@ class CameraController(
             transport == TransportMode.USB_AOA -> ""
             else -> "127.0.0.1:39393"
         }
-        targetWidth = width
-        targetHeight = height
+        val captureSize = CameraSurfacePipeline.resolveCaptureSize(context, width, height)
+        targetWidth = captureSize.width
+        targetHeight = captureSize.height
 
-        val startLine = "start transport=$transport receiver=$currentReceiver ${width}x$height@$fps bitrate=$bitrate mic=$pushMic"
-        Log.i("ACB", startLine)
+        val startLine = "start transport=$transport receiver=$currentReceiver ${targetWidth}x${targetHeight}@$fps bitrate=$bitrate mic=$pushMic"
+        AppLog.i("ACB", startLine)
         onDebugEvent?.invoke(startLine)
         lastStartAtMs = System.currentTimeMillis()
+
+        try {
+            if (videoEncoder == null) {
+                videoEncoder = VideoAvcEncoder(targetWidth, targetHeight, bitrate, fps) { avc, isKey ->
+                    v2Client.sendVideoFrame(avc, isKey)
+                }
+                AppLog.i("ACB", "video encoder ready ${targetWidth}x${targetHeight}@$fps bitrate=$bitrate")
+            }
+            cameraPipeline.start(
+                width = targetWidth,
+                height = targetHeight,
+                fps = fps,
+                encoderSurface = videoEncoder!!.inputSurface,
+            )
+        } catch (t: Throwable) {
+            val line = "video pipeline init failed: ${t.message}"
+            AppLog.e("ACB", line, t)
+            onDebugEvent?.invoke(line)
+        }
 
         val transportName = when (transport) {
             TransportMode.LAN -> "lan"
@@ -94,78 +100,11 @@ class CameraController(
         }
         startSessionLoop(
             transportName = transportName,
-            width = width,
-            height = height,
+            width = targetWidth,
+            height = targetHeight,
             fps = fps,
             bitrate = bitrate,
         )
-
-        val providerFuture = ProcessCameraProvider.getInstance(context)
-        providerFuture.addListener({
-            val provider = providerFuture.get()
-
-            @Suppress("DEPRECATION")
-            val analysisBuilder = ImageAnalysis.Builder()
-                .setTargetResolution(android.util.Size(width, height))
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-
-            @Suppress("UnsafeOptInUsageError")
-            Camera2Interop.Extender(analysisBuilder)
-                .setCaptureRequestOption(
-                    android.hardware.camera2.CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
-                    Range(fps, fps)
-                )
-
-            val analysis = analysisBuilder.build()
-
-            val rotation = previewView?.display?.rotation ?: android.view.Surface.ROTATION_0
-            analysis.targetRotation = rotation
-
-            analysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                if (!running.get()) {
-                    imageProxy.close()
-                    return@setAnalyzer
-                }
-
-                try {
-                    if (shouldPushLegacyHttp()) {
-                        val cropRect = normalizedCropRect(imageProxy.cropRect, imageProxy.width, imageProxy.height)
-                        val jpeg = imageProxyToJpeg(imageProxy, cropRect)
-                        val w = cropRect.width()
-                        val h = cropRect.height()
-                        uploadExecutor.execute {
-                            postFrame(jpeg, w, h)
-                        }
-                    }
-                    videoEncoder?.encode(imageProxy) { avc, isKey ->
-                        v2Client.sendVideoFrame(avc, isKey)
-                    }
-                } catch (t: Throwable) {
-                    Log.e("ACB", "frame encode failed", t)
-                } finally {
-                    imageProxy.close()
-                }
-            }
-
-            provider.unbindAll()
-            if (previewView != null) {
-                val preview = Preview.Builder().build().also {
-                    it.setSurfaceProvider(previewView.surfaceProvider)
-                    it.targetRotation = rotation
-                }
-                val viewPort = ViewPort.Builder(android.util.Rational(width, height), rotation)
-                    .setScaleType(ViewPort.FILL_CENTER)
-                    .build()
-                val group = UseCaseGroup.Builder()
-                    .setViewPort(viewPort)
-                    .addUseCase(preview)
-                    .addUseCase(analysis)
-                    .build()
-                provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, group)
-            } else {
-                provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, analysis)
-            }
-        }, ContextCompat.getMainExecutor(context))
 
         if (pushMic) {
             startMicStream()
@@ -176,14 +115,7 @@ class CameraController(
         if (!running.get()) return
         running.set(false)
         micRunning.set(false)
-
-        // Stop camera FIRST so no more frames arrive at the encoder
-        try {
-            ProcessCameraProvider.getInstance(context).get().unbindAll()
-        } catch (_: Throwable) {
-        }
-        // Brief wait for in-flight analyzer callbacks to finish
-        try { Thread.sleep(100) } catch (_: Throwable) {}
+        cameraPipeline.stop()
 
         videoEncoder?.stop()
         videoEncoder = null
@@ -191,7 +123,7 @@ class CameraController(
         audioEncoder = null
         v2Client.close()
 
-        Log.i("ACB", "stop stream")
+        AppLog.i("ACB", "stop stream")
     }
 
     fun isRunning(): Boolean = running.get()
@@ -250,10 +182,10 @@ class CameraController(
                 aec?.enabled = true
             }
         } catch (t: Throwable) {
-            Log.w("ACB", "audio fx setup failed: ${t.message}")
+            AppLog.w("ACB", "audio fx setup failed: ${t.message}", t)
         }
 
-        Log.i(
+        AppLog.i(
             "ACB",
             "audio fx ns=${ns?.enabled == true} agc=${agc?.enabled == true} aec=${aec?.enabled == true}",
         )
@@ -270,7 +202,7 @@ class CameraController(
             val encoding = AudioFormat.ENCODING_PCM_16BIT
             val minBuffer = AudioRecord.getMinBufferSize(sampleRate, channelConfig, encoding)
             if (minBuffer <= 0) {
-                Log.w("ACB", "AudioRecord min buffer invalid")
+                AppLog.w("ACB", "AudioRecord min buffer invalid")
                 micRunning.set(false)
                 return@execute
             }
@@ -281,7 +213,7 @@ class CameraController(
                     Manifest.permission.RECORD_AUDIO
                 ) != PackageManager.PERMISSION_GRANTED
             ) {
-                Log.w("ACB", "RECORD_AUDIO permission not granted, skip mic stream")
+                AppLog.w("ACB", "RECORD_AUDIO permission not granted, skip mic stream")
                 micRunning.set(false)
                 return@execute
             }
@@ -312,7 +244,7 @@ class CameraController(
                     }
                 }
             } catch (t: Throwable) {
-                Log.w("ACB", "mic stream failed: ${t.message}")
+                AppLog.w("ACB", "mic stream failed: ${t.message}", t)
             } finally {
                 try {
                     recorder.stop()
@@ -323,64 +255,6 @@ class CameraController(
                 micRunning.set(false)
             }
         }
-    }
-
-    private fun imageProxyToJpeg(image: androidx.camera.core.ImageProxy, cropRect: Rect): ByteArray {
-        val yBuffer = image.planes[0].buffer
-        val uBuffer = image.planes[1].buffer
-        val vBuffer = image.planes[2].buffer
-        val width = image.width
-        val height = image.height
-        val ySize = width * height
-        val uvSize = width * height / 2
-        val nv21 = ByteArray(ySize + uvSize)
-
-        val yRowStride = image.planes[0].rowStride
-        var yPos = 0
-        for (row in 0 until height) {
-            val rowStart = row * yRowStride
-            yBuffer.position(rowStart)
-            yBuffer.get(nv21, yPos, width)
-            yPos += width
-        }
-
-        val chromaRowStride = image.planes[1].rowStride
-        val chromaPixelStride = image.planes[1].pixelStride
-        var offset = ySize
-        val chromaHeight = height / 2
-        val chromaWidth = width / 2
-
-        for (row in 0 until chromaHeight) {
-            for (col in 0 until chromaWidth) {
-                val vuPos = row * chromaRowStride + col * chromaPixelStride
-                nv21[offset++] = vBuffer.get(vuPos.coerceAtMost(vBuffer.limit() - 1))
-                nv21[offset++] = uBuffer.get(vuPos.coerceAtMost(uBuffer.limit() - 1))
-            }
-        }
-
-        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
-        val stream = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(cropRect, 90, stream)
-        return stream.toByteArray()
-    }
-
-    private fun normalizedCropRect(src: Rect?, srcW: Int, srcH: Int): Rect {
-        val full = Rect(0, 0, srcW, srcH)
-        if (src == null || src.isEmpty) return full
-
-        var left = src.left.coerceIn(0, srcW - 1)
-        var top = src.top.coerceIn(0, srcH - 1)
-        var right = src.right.coerceIn(left + 1, srcW)
-        var bottom = src.bottom.coerceIn(top + 1, srcH)
-
-        // YUV420 requires even alignment.
-        left = left and 0xFFFFFFFE.toInt()
-        top = top and 0xFFFFFFFE.toInt()
-        right = right and 0xFFFFFFFE.toInt()
-        bottom = bottom and 0xFFFFFFFE.toInt()
-
-        if (right <= left + 1 || bottom <= top + 1) return full
-        return Rect(left, top, right, bottom)
     }
 
     private fun postFrame(jpeg: ByteArray, width: Int, height: Int) {
@@ -401,10 +275,10 @@ class CameraController(
             }
             val code = conn.responseCode
             if (code !in 200..299) {
-                Log.w("ACB", "frame upload http=$code endpoint=$endpoint")
+                AppLog.w("ACB", "frame upload http=$code endpoint=$endpoint")
             }
         } catch (t: Throwable) {
-            Log.w("ACB", "frame upload failed: ${t.message}")
+            AppLog.w("ACB", "frame upload failed: ${t.message}", t)
         } finally {
             conn?.disconnect()
         }
@@ -432,11 +306,7 @@ class CameraController(
         }
     }
 
-    private fun shouldPushLegacyHttp(): Boolean {
-        // Keep legacy path only as bootstrap fallback.
-        // Once v2 is up, disable v1 to avoid dual-path contention and latency spikes.
-        return currentMode != TransportMode.USB_NATIVE && currentMode != TransportMode.USB_AOA && !v2Client.isConnected()
-    }
+    private fun shouldPushLegacyHttp(): Boolean = false
 
     private fun startSessionLoop(
         transportName: String,
@@ -458,15 +328,22 @@ class CameraController(
                 if (!running.get()) break
 
                 if (v2Session != null) {
-                    if (videoEncoder == null) {
-                        videoEncoder = VideoAvcEncoder(width, height, bitrate, fps)
-                    }
-                    if (audioEncoder == null) {
-                        audioEncoder = AudioAacEncoder(sampleRate = 48_000, channels = 1, bitrate = 96_000)
+                    try {
+                        if (audioEncoder == null) {
+                            audioEncoder = AudioAacEncoder(sampleRate = 48_000, channels = 1, bitrate = 96_000)
+                            AppLog.i("ACB", "audio encoder ready sampleRate=48000 channels=1 bitrate=96000")
+                        }
+                    } catch (t: Throwable) {
+                        val line = "encoder init failed: ${t.message}"
+                        AppLog.e("ACB", line, t)
+                        onDebugEvent?.invoke(line)
+                        attempt += 1
+                        sleepQuietly(1000)
+                        continue
                     }
                     v2Client.connect(v2Session.wsUrl)
                     val line = "v2 session connect attempt ok transport=$transportName receiver=$currentReceiver"
-                    Log.i("ACB", line)
+                    AppLog.i("ACB", line)
                     onDebugEvent?.invoke(line)
                     attempt = 0
                     // Give websocket/usb-native handshake a short window to settle.
@@ -476,7 +353,7 @@ class CameraController(
                     val backoffMs = min(3000, 500 + attempt * 250)
                     if (attempt == 1 || attempt % 6 == 0) {
                         val line = "v2 session retry #$attempt transport=$transportName receiver=$currentReceiver"
-                        Log.w("ACB", line)
+                        AppLog.w("ACB", line)
                         onDebugEvent?.invoke(line)
                     }
                     sleepQuietly(backoffMs.toLong())

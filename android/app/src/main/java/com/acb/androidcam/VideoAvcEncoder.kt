@@ -3,8 +3,9 @@ package com.acb.androidcam
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
-import android.graphics.Rect
-import androidx.camera.core.ImageProxy
+import android.view.Surface
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
 class VideoAvcEncoder(
@@ -12,21 +13,26 @@ class VideoAvcEncoder(
     private val height: Int,
     bitrate: Int,
     fps: Int,
+    private val onEncoded: (ByteArray, Boolean) -> Unit,
 ) {
     private val codec: MediaCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
     private val bufferInfo = MediaCodec.BufferInfo()
+    private val running = AtomicBoolean(true)
     private var codecConfig: ByteArray? = null
+    private var outputFrames = 0L
+    private var drainThread: Thread? = null
+    val inputSurface: Surface
 
     init {
         val safeFps = if (fps > 0) fps else 30
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
-            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, safeFps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
             setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
             if (android.os.Build.VERSION.SDK_INT >= 23) {
-                setInteger(MediaFormat.KEY_PRIORITY, 0) // 0 = real-time
+                setInteger(MediaFormat.KEY_PRIORITY, 0)
             }
             if (android.os.Build.VERSION.SDK_INT >= 30) {
                 setInteger(MediaFormat.KEY_LATENCY, 1)
@@ -36,65 +42,98 @@ class VideoAvcEncoder(
             }
         }
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        inputSurface = codec.createInputSurface()
         codec.start()
+        AppLog.i("VideoAvcEncoder", "configured surface encoder ${width}x${height} fps=$safeFps bitrate=$bitrate")
+        startDrainLoop()
     }
 
-    fun encode(image: ImageProxy, onEncoded: (ByteArray, Boolean) -> Unit) {
-        val input = codec.dequeueInputBuffer(0)
-        if (input >= 0) {
-            val ptsUs = System.nanoTime() / 1000L
-            val codecImage = try { codec.getInputImage(input) } catch (_: Throwable) { null }
-            if (codecImage != null) {
-                fillCodecImage(image, codecImage)
-                codec.queueInputBuffer(input, 0, 0, ptsUs, 0)
-            } else {
-                val inBuf = codec.getInputBuffer(input)
-                if (inBuf != null) {
-                    val i420 = imageToI420(image)
-                    inBuf.clear()
-                    if (inBuf.capacity() >= i420.size) {
-                        inBuf.put(i420)
-                        codec.queueInputBuffer(input, 0, i420.size, ptsUs, 0)
-                    } else {
-                        codec.queueInputBuffer(input, 0, 0, 0, 0)
-                    }
-                } else {
-                    codec.queueInputBuffer(input, 0, 0, 0, 0)
-                }
-            }
-        }
+    private fun startDrainLoop() {
+        drainThread = Thread({ drainLoop() }, "AcbVideoDrain").also { it.start() }
+    }
 
-        while (true) {
-            val outIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
-            if (outIndex < 0) break
-            val outBuf = codec.getOutputBuffer(outIndex)
-            if (outBuf != null && bufferInfo.size > 0) {
-                val bytes = ByteArray(bufferInfo.size)
-                outBuf.position(bufferInfo.offset)
-                outBuf.limit(bufferInfo.offset + bufferInfo.size)
-                outBuf.get(bytes)
-                val isCodecConfig = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
-                val isKey = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-                if (isCodecConfig) {
-                    codecConfig = bytes
-                } else {
-                    val output = if (isKey && codecConfig != null && shouldPrependCodecConfig(codecConfig!!)) {
-                        val cfg = codecConfig!!
-                        val merged = ByteArray(cfg.size + bytes.size)
-                        System.arraycopy(cfg, 0, merged, 0, cfg.size)
-                        System.arraycopy(bytes, 0, merged, cfg.size, bytes.size)
-                        merged
+    private fun drainLoop() {
+        while (running.get()) {
+            val outIndex = try {
+                codec.dequeueOutputBuffer(bufferInfo, 10_000)
+            } catch (t: Throwable) {
+                if (running.get()) {
+                    AppLog.e("VideoAvcEncoder", "dequeueOutputBuffer failed: ${t.message}", t)
+                }
+                break
+            }
+
+            if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                continue
+            }
+            if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                AppLog.i("VideoAvcEncoder", "output format changed: ${codec.outputFormat}")
+                continue
+            }
+            if (outIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
+                AppLog.d("VideoAvcEncoder", "output buffers changed")
+                continue
+            }
+            if (outIndex < 0) {
+                continue
+            }
+
+            try {
+                val outBuf = codec.getOutputBuffer(outIndex)
+                if (outBuf != null && bufferInfo.size > 0) {
+                    val bytes = ByteArray(bufferInfo.size)
+                    outBuf.position(bufferInfo.offset)
+                    outBuf.limit(bufferInfo.offset + bufferInfo.size)
+                    outBuf.get(bytes)
+                    val isCodecConfig = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+                    val isKey = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
+                    if (isCodecConfig) {
+                        codecConfig = normalizeCodecConfig(bytes)
                     } else {
-                        bytes
+                        val normalized = normalizeVideoPayload(bytes)
+                        val output = if (isKey && codecConfig != null) {
+                            merge(codecConfig!!, normalized)
+                        } else {
+                            normalized
+                        }
+                        outputFrames += 1
+                        if (outputFrames == 1L || outputFrames % 120L == 0L) {
+                            AppLog.i(
+                                "VideoAvcEncoder",
+                                "encoded frames=$outputFrames size=${output.size} key=$isKey",
+                            )
+                        }
+                        onEncoded(output, isKey)
                     }
-                    onEncoded(output, isKey)
+                }
+            } catch (t: Throwable) {
+                if (running.get()) {
+                    AppLog.e("VideoAvcEncoder", "drain output failed: ${t.message}", t)
+                }
+            } finally {
+                try {
+                    codec.releaseOutputBuffer(outIndex, false)
+                } catch (_: Throwable) {
                 }
             }
-            codec.releaseOutputBuffer(outIndex, false)
         }
     }
 
     fun stop() {
+        if (!running.compareAndSet(true, false)) return
+        try {
+            codec.signalEndOfInputStream()
+        } catch (_: Throwable) {
+        }
+        try {
+            drainThread?.join(500)
+        } catch (_: InterruptedException) {
+        }
+        drainThread = null
+        try {
+            inputSurface.release()
+        } catch (_: Throwable) {
+        }
         try {
             codec.stop()
         } catch (_: Throwable) {
@@ -105,126 +144,113 @@ class VideoAvcEncoder(
         }
     }
 
-    private fun shouldPrependCodecConfig(cfg: ByteArray): Boolean {
-        if (cfg.size < 4) return false
-        // Annex-B start code
-        for (i in 0 until min(cfg.size - 3, 32)) {
-            if (cfg[i] == 0.toByte() && cfg[i + 1] == 0.toByte() &&
-                (cfg[i + 2] == 1.toByte() || (cfg[i + 2] == 0.toByte() && cfg[i + 3] == 1.toByte()))
+    private fun normalizeVideoPayload(data: ByteArray): ByteArray {
+        if (hasAnnexBStartCode(data)) return data
+        return convertLengthPrefixedNalToAnnexB(data) ?: data
+    }
+
+    private fun normalizeCodecConfig(data: ByteArray): ByteArray? {
+        if (data.isEmpty()) return null
+        if (hasAnnexBStartCode(data)) return data
+        return convertLengthPrefixedNalToAnnexB(data)
+            ?: convertAvcConfigRecordToAnnexB(data)
+    }
+
+    private fun merge(first: ByteArray, second: ByteArray): ByteArray {
+        val merged = ByteArray(first.size + second.size)
+        System.arraycopy(first, 0, merged, 0, first.size)
+        System.arraycopy(second, 0, merged, first.size, second.size)
+        return merged
+    }
+
+    private fun hasAnnexBStartCode(data: ByteArray): Boolean {
+        if (data.size < 4) return false
+        val scanLimit = min(data.size - 3, 31)
+        for (i in 0..scanLimit) {
+            if (data[i] == 0.toByte() && data[i + 1] == 0.toByte() &&
+                (data[i + 2] == 1.toByte() || (data[i + 2] == 0.toByte() && data[i + 3] == 1.toByte()))
             ) {
                 return true
             }
         }
-        // AVCC length-prefixed NAL (single chunk heuristic)
-        val naluLen = ((cfg[0].toInt() and 0xFF) shl 24) or
-            ((cfg[1].toInt() and 0xFF) shl 16) or
-            ((cfg[2].toInt() and 0xFF) shl 8) or
-            (cfg[3].toInt() and 0xFF)
-        return naluLen in 1 until cfg.size
+        return false
     }
 
-    /**
-     * Copy YUV planes from camera ImageProxy into the codec's input Image,
-     * respecting the destination plane layout (NV12/I420/etc.) automatically.
-     */
-    private fun fillCodecImage(src: ImageProxy, dst: android.media.Image) {
-        val crop = src.cropRect
-        val cropLeft = crop.left.coerceAtLeast(0)
-        val cropTop = crop.top.coerceAtLeast(0)
-
-        // Y plane — pixelStride is always 1, use row-based bulk copy
-        run {
-            val srcP = src.planes[0]
-            val dstP = dst.planes[0]
-            val srcBuf = srcP.buffer
-            val dstBuf = dstP.buffer
-            val rowBytes = ByteArray(width)
-            for (row in 0 until height) {
-                val srcPos = (cropTop + row) * srcP.rowStride + cropLeft
-                if (srcPos + width <= srcBuf.limit()) {
-                    srcBuf.position(srcPos)
-                    srcBuf.get(rowBytes)
-                } else {
-                    for (col in 0 until width) {
-                        rowBytes[col] = srcBuf.get((srcPos + col).coerceAtMost(srcBuf.limit() - 1))
-                    }
-                }
-                dstBuf.position(row * dstP.rowStride)
-                dstBuf.put(rowBytes)
-            }
-        }
-
-        // U and V planes — per-pixel for correct NV12/I420 handling
-        val halfW = width / 2
-        val halfH = height / 2
-        val uvLeft = cropLeft / 2
-        val uvTop = cropTop / 2
-
-        for (planeIdx in 1..2) {
-            val srcPlane = src.planes[planeIdx]
-            val dstPlane = dst.planes[planeIdx]
-            val srcBuf = srcPlane.buffer
-            val dstBuf = dstPlane.buffer
-            for (row in 0 until halfH) {
-                val srcRowBase = (uvTop + row) * srcPlane.rowStride
-                val dstRowBase = row * dstPlane.rowStride
-                for (col in 0 until halfW) {
-                    val srcPos = srcRowBase + (uvLeft + col) * srcPlane.pixelStride
-                    val dstPos = dstRowBase + col * dstPlane.pixelStride
-                    dstBuf.put(dstPos, srcBuf.get(srcPos.coerceAtMost(srcBuf.limit() - 1)))
-                }
-            }
-        }
-    }
-
-    private fun imageToI420(image: ImageProxy): ByteArray {
-        val yPlane = image.planes[0]
-        val uPlane = image.planes[1]
-        val vPlane = image.planes[2]
-        val crop: Rect = image.cropRect
-        val cropLeft = crop.left.coerceAtLeast(0)
-        val cropTop = crop.top.coerceAtLeast(0)
-
-        val out = ByteArray(width * height * 3 / 2)
+    private fun convertLengthPrefixedNalToAnnexB(data: ByteArray): ByteArray? {
+        if (data.size < 4) return null
+        val out = ByteArrayOutputStream(data.size + 64)
         var offset = 0
-
-        val yBuffer = yPlane.buffer
-        for (row in 0 until height) {
-            val srcRow = cropTop + row
-            val rowBase = srcRow * yPlane.rowStride
-            for (col in 0 until width) {
-                val srcCol = cropLeft + col
-                val pos = rowBase + srcCol * yPlane.pixelStride
-                out[offset++] = yBuffer.get(pos.coerceIn(0, yBuffer.limit() - 1))
+        while (offset + 4 <= data.size) {
+            val nalSize = readUint32(data, offset)
+            offset += 4
+            if (nalSize == 0) {
+                continue
             }
+            if (nalSize < 0 || offset + nalSize > data.size) {
+                return null
+            }
+            out.write(0)
+            out.write(0)
+            out.write(0)
+            out.write(1)
+            out.write(data, offset, nalSize)
+            offset += nalSize
+        }
+        if (offset != data.size || out.size() == 0) return null
+        return out.toByteArray()
+    }
+
+    private fun convertAvcConfigRecordToAnnexB(data: ByteArray): ByteArray? {
+        if (data.size < 7 || data[0] != 0x01.toByte()) return null
+        var offset = 5
+        val spsCount = data[offset].toInt() and 0x1F
+        offset += 1
+        val out = ByteArrayOutputStream(data.size + 32)
+
+        repeat(spsCount) {
+            if (!appendAnnexBNalFromLengthField(data, out, offset)) return null
+            val nalSize = readUint16(data, offset)
+            offset += 2 + nalSize
         }
 
-        val halfW = width / 2
-        val halfH = height / 2
-        val uBuffer = uPlane.buffer
-        val vBuffer = vPlane.buffer
-        val uvLeft = cropLeft / 2
-        val uvTop = cropTop / 2
-
-        for (row in 0 until halfH) {
-            val srcRow = uvTop + row
-            val rowBase = srcRow * uPlane.rowStride
-            for (col in 0 until halfW) {
-                val srcCol = uvLeft + col
-                val pos = rowBase + srcCol * uPlane.pixelStride
-                out[offset++] = uBuffer.get(pos.coerceAtMost(uBuffer.limit() - 1))
-            }
-        }
-        for (row in 0 until halfH) {
-            val srcRow = uvTop + row
-            val rowBase = srcRow * vPlane.rowStride
-            for (col in 0 until halfW) {
-                val srcCol = uvLeft + col
-                val pos = rowBase + srcCol * vPlane.pixelStride
-                out[offset++] = vBuffer.get(pos.coerceAtMost(vBuffer.limit() - 1))
-            }
+        if (offset >= data.size) return null
+        val ppsCount = data[offset].toInt() and 0xFF
+        offset += 1
+        repeat(ppsCount) {
+            if (!appendAnnexBNalFromLengthField(data, out, offset)) return null
+            val nalSize = readUint16(data, offset)
+            offset += 2 + nalSize
         }
 
-        return out
+        return if (out.size() > 0) out.toByteArray() else null
+    }
+
+    private fun appendAnnexBNalFromLengthField(
+        data: ByteArray,
+        out: ByteArrayOutputStream,
+        offset: Int,
+    ): Boolean {
+        if (offset + 2 > data.size) return false
+        val nalSize = readUint16(data, offset)
+        val nalStart = offset + 2
+        if (nalSize <= 0 || nalStart + nalSize > data.size) return false
+        out.write(0)
+        out.write(0)
+        out.write(0)
+        out.write(1)
+        out.write(data, nalStart, nalSize)
+        return true
+    }
+
+    private fun readUint16(data: ByteArray, offset: Int): Int {
+        return ((data[offset].toInt() and 0xFF) shl 8) or
+            (data[offset + 1].toInt() and 0xFF)
+    }
+
+    private fun readUint32(data: ByteArray, offset: Int): Int {
+        return ((data[offset].toInt() and 0xFF) shl 24) or
+            ((data[offset + 1].toInt() and 0xFF) shl 16) or
+            ((data[offset + 2].toInt() and 0xFF) shl 8) or
+            (data[offset + 3].toInt() and 0xFF)
     }
 }

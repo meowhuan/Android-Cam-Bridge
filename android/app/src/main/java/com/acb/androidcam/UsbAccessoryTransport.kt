@@ -4,7 +4,6 @@ import android.content.Context
 import android.hardware.usb.UsbAccessory
 import android.hardware.usb.UsbManager
 import android.os.ParcelFileDescriptor
-import android.util.Log
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
@@ -42,7 +41,7 @@ class UsbAccessoryTransport(
 
     private fun emit(msg: String) {
         onDebugLog?.invoke(msg)
-        Log.i(TAG, msg)
+        AppLog.i(TAG, msg)
     }
 
     fun open(accessory: UsbAccessory): Boolean {
@@ -51,12 +50,12 @@ class UsbAccessoryTransport(
         val pfd: ParcelFileDescriptor? = try {
             usbManager.openAccessory(accessory)
         } catch (e: Exception) {
-            Log.e(TAG, "openAccessory failed: ${e.message}")
+            AppLog.e(TAG, "openAccessory failed: ${e.message}", e)
             emit("openAccessory failed: ${e.message}")
             null
         }
         if (pfd == null) {
-            Log.e(TAG, "openAccessory returned null")
+            AppLog.e(TAG, "openAccessory returned null")
             emit("openAccessory returned null")
             return false
         }
@@ -83,13 +82,13 @@ class UsbAccessoryTransport(
     fun sendFrame(v2Packet: ByteArray) {
         if (!connected.get()) return
         if (v2Packet.size > MAX_FRAME_SIZE) {
-            Log.w(TAG, "sendFrame: packet too large (${v2Packet.size} > $MAX_FRAME_SIZE), dropping")
+            AppLog.w(TAG, "sendFrame: packet too large (${v2Packet.size} > $MAX_FRAME_SIZE), dropping")
             return
         }
 
         val frame = buildEnvelope(v2Packet)
         if (!writeQueue.offer(frame)) {
-            Log.w(TAG, "sendFrame: write queue full, dropping frame (size=${v2Packet.size})")
+            AppLog.w(TAG, "sendFrame: write queue full, dropping frame (size=${v2Packet.size})")
         }
     }
 
@@ -103,7 +102,7 @@ class UsbAccessoryTransport(
     }
 
     private fun writeLoop() {
-        Log.d(TAG, "writeLoop started")
+        AppLog.d(TAG, "writeLoop started")
         try {
             while (running.get()) {
                 val frame = writeQueue.poll(5, TimeUnit.MILLISECONDS) ?: continue
@@ -115,6 +114,10 @@ class UsbAccessoryTransport(
                     txFrames.incrementAndGet()
                     txBytes.addAndGet(frame.size.toLong())
                     lastSendTimeMs.set(System.currentTimeMillis())
+                    val sent = txFrames.get()
+                    if (sent == 1L || sent % 120L == 0L) {
+                        AppLog.i(TAG, "usb frame written count=$sent bytes=${frame.size} queued=${writeQueue.size}")
+                    }
                 } catch (e: IOException) {
                     if (running.get()) {
                         emit("Write error: ${e.message}")
@@ -124,15 +127,15 @@ class UsbAccessoryTransport(
                 }
             }
         } catch (_: InterruptedException) {
-            Log.d(TAG, "writeLoop interrupted")
+            AppLog.d(TAG, "writeLoop interrupted")
         } catch (_: Throwable) {
             // Catch any native crash fallout (e.g. closed FD)
         }
-        Log.d(TAG, "writeLoop exiting")
+        AppLog.d(TAG, "writeLoop exiting")
     }
 
     private fun keepaliveLoop() {
-        Log.d(TAG, "keepaliveLoop started")
+        AppLog.d(TAG, "keepaliveLoop started")
         try {
             while (running.get() && connected.get()) {
                 Thread.sleep(KEEPALIVE_INTERVAL_MS)
@@ -160,7 +163,7 @@ class UsbAccessoryTransport(
         } catch (_: InterruptedException) {
         } catch (_: Throwable) {
         }
-        Log.d(TAG, "keepaliveLoop exiting")
+        AppLog.d(TAG, "keepaliveLoop exiting")
     }
 
     fun close() {

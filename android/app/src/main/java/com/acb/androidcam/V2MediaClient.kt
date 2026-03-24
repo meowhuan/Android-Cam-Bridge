@@ -1,6 +1,5 @@
 package com.acb.androidcam
 
-import android.util.Log
 import android.util.Base64
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -27,7 +26,7 @@ class V2MediaClient(
 ) {
     private fun emit(msg: String) {
         onDebugEvent?.invoke(msg)
-        Log.i("ACB", msg)
+        AppLog.i("ACB", msg)
     }
     private val http = OkHttpClient.Builder()
         .connectTimeout(2, TimeUnit.SECONDS)
@@ -120,7 +119,7 @@ class V2MediaClient(
                 )
             }
         } catch (t: Throwable) {
-            Log.w("ACB", "v2 start session failed: ${t.message}")
+            AppLog.w("ACB", "v2 start session failed: ${t.message}", t)
             onDebugEvent?.invoke("v2 start session failed: ${t.message}")
             null
         }
@@ -227,7 +226,7 @@ class V2MediaClient(
                 emit("usb-native link connected receiver=$receiverAddress sessionId=$sessionId linkId=$usbNativeLinkId")
                 sendUsbNativeProbePacket()
             } else {
-                Log.w("ACB", "usb-native link handshake failed")
+                AppLog.w("ACB", "usb-native link handshake failed")
                 onDebugEvent?.invoke("usb-native link handshake failed")
             }
             return
@@ -239,13 +238,11 @@ class V2MediaClient(
                 if (usbAccessoryTransport?.isConnected() == true) {
                     connected.set(true)
                     lastConnectedAtMs.set(System.currentTimeMillis())
-                    Log.i("ACB", "USB AOA transport connected")
                     emit("USB AOA transport connected")
                     return
                 }
                 try { Thread.sleep(500) } catch (_: InterruptedException) { return }
             }
-            Log.w("ACB", "USB AOA transport not connected after 15s")
             emit("USB AOA transport not connected after 15s")
             return
         }
@@ -256,12 +253,12 @@ class V2MediaClient(
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 connected.set(true)
                 lastConnectedAtMs.set(System.currentTimeMillis())
-                Log.i("ACB", "v2 websocket connected")
+                AppLog.i("ACB", "v2 websocket connected")
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 connected.set(false)
-                Log.w("ACB", "v2 websocket failed: ${t.message}")
+                AppLog.w("ACB", "v2 websocket failed: ${t.message}", t)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
@@ -276,7 +273,13 @@ class V2MediaClient(
 
     fun sendVideoFrame(payload: ByteArray, isKeyframe: Boolean) {
         if (!connected.get()) return
-        frameIndex.incrementAndGet()
+        val sent = frameIndex.incrementAndGet()
+        if (sent == 1L || sent % 120L == 0L) {
+            AppLog.i(
+                "ACB",
+                "video packet queued count=$sent transport=$activeTransport size=${payload.size} key=$isKeyframe",
+            )
+        }
         val flags = if (isKeyframe) 0x01 else 0x00
         sendBinary(streamType = 1, codec = 1, flags = flags, payload = payload)
     }
@@ -330,7 +333,7 @@ class V2MediaClient(
                 usbNativeLinkId.isNotBlank()
             }
         } catch (t: Throwable) {
-            Log.w("ACB", "usb-native handshake failed: ${t.message}")
+            AppLog.w("ACB", "usb-native handshake failed: ${t.message}", t)
             onDebugEvent?.invoke("usb-native handshake failed: ${t.message}")
             false
         }
@@ -354,14 +357,14 @@ class V2MediaClient(
             usbPacketHttp.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) {
                     val msg = resp.body?.string()?.take(200) ?: ""
-                    Log.w("ACB", "usb-native packet failed http=${resp.code} seq=$seq size=${packet.size} body=$msg")
+                    AppLog.w("ACB", "usb-native packet failed http=${resp.code} seq=$seq size=${packet.size} body=$msg")
                     onDebugEvent?.invoke("usb-native packet failed http=${resp.code} seq=$seq size=${packet.size}")
                 } else if (count % 60L == 0L) {
                     emit("usb-native packet sent count=$count seq=$seq size=${packet.size}")
                 }
             }
         } catch (t: Throwable) {
-            Log.w("ACB", "usb-native packet send failed seq=$seq size=${packet.size}: ${t.message}")
+            AppLog.w("ACB", "usb-native packet send failed seq=$seq size=${packet.size}: ${t.message}", t)
             onDebugEvent?.invoke("usb-native packet send failed seq=$seq size=${packet.size}: ${t.message}")
         }
     }
@@ -384,7 +387,7 @@ class V2MediaClient(
                 emit("usb-native probe http=${resp.code} resp=$text")
             }
         } catch (t: Throwable) {
-            Log.w("ACB", "usb-native probe failed: ${t.message}")
+            AppLog.w("ACB", "usb-native probe failed: ${t.message}", t)
             onDebugEvent?.invoke("usb-native probe failed: ${t.message}")
         }
     }
@@ -401,5 +404,6 @@ class V2MediaClient(
 
     fun setUsbAccessoryTransport(transport: UsbAccessoryTransport?) {
         usbAccessoryTransport = transport
+        AppLog.i("ACB", "usb accessory transport attached connected=${transport?.isConnected() == true}")
     }
 }

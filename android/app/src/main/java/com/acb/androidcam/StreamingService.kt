@@ -3,14 +3,22 @@ package com.acb.androidcam
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.app.Service
 import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbAccessory
+import android.hardware.usb.UsbManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 
 class StreamingService : LifecycleService() {
     private var controller: CameraController? = null
+    private var usbAccessoryTransport: UsbAccessoryTransport? = null
+    private var pendingAccessory: UsbAccessory? = null
     @Volatile private var running = false
     private var reconnectCount = 0
     private var monitorThread: Thread? = null
@@ -27,6 +35,10 @@ class StreamingService : LifecycleService() {
 
     override fun onCreate() {
         super.onCreate()
+        AppLog.init(this)
+        AppLog.i("StreamingService", "onCreate logDir=${AppLog.getLogDirPath()}")
+        registerReceiver(usbPermissionReceiver, IntentFilter(ACTION_USB_PERMISSION),
+            Context.RECEIVER_NOT_EXPORTED)
         ensureChannel()
         startMonitor()
     }
@@ -42,11 +54,16 @@ class StreamingService : LifecycleService() {
                 cfgFps = intent.getIntExtra(EXTRA_FPS, 60)
                 cfgBitrate = intent.getIntExtra(EXTRA_BITRATE, 5_000_000)
                 cfgPushMic = intent.getBooleanExtra(EXTRA_PUSH_MIC, true)
+                AppLog.i(
+                    "StreamingService",
+                    "ACTION_START transport=$cfgTransport receiver=$cfgReceiver ${cfgWidth}x${cfgHeight}@$cfgFps bitrate=$cfgBitrate mic=$cfgPushMic",
+                )
                 reconnectCount = 0
                 startStreaming("started")
             }
 
             ACTION_STOP -> {
+                AppLog.i("StreamingService", "ACTION_STOP")
                 stopStreaming("stopped")
                 stopSelf()
             }
@@ -55,9 +72,12 @@ class StreamingService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        AppLog.i("StreamingService", "onDestroy")
         stopStreaming("destroyed")
+        releaseUsbAccessoryTransport("service_destroy")
         stopMonitor = true
         monitorThread?.join(500)
+        try { unregisterReceiver(usbPermissionReceiver) } catch (_: Throwable) {}
         super.onDestroy()
     }
 
@@ -74,6 +94,11 @@ class StreamingService : LifecycleService() {
         }
         if (running) {
             controller?.stop()
+            releaseUsbAccessoryTransport("restart")
+        }
+        AppLog.i("StreamingService", "startStreaming reason=$reason reconnect=$reconnectCount")
+        if (cfgTransport == "usb-aoa") {
+            ensureUsbAccessoryReady("startStreaming")
         }
         controller?.start(
             transport = when (cfgTransport) {
@@ -95,7 +120,9 @@ class StreamingService : LifecycleService() {
 
     private fun stopStreaming(reason: String) {
         if (!running) return
+        AppLog.i("StreamingService", "stopStreaming reason=$reason")
         controller?.stop()
+        releaseUsbAccessoryTransport("stopStreaming_$reason")
         running = false
         @Suppress("DEPRECATION")
         if (Build.VERSION.SDK_INT >= 33) {
@@ -117,6 +144,10 @@ class StreamingService : LifecycleService() {
                         if (!healthy) {
                             val backoffSec = minOf(30, 5 + reconnectCount * 2)
                             if (now - lastReconnectAttemptAtMs >= backoffSec * 1000L) {
+                                AppLog.w(
+                                    "StreamingService",
+                                    "stream unhealthy; scheduling reconnect in ${backoffSec}s (count=${reconnectCount + 1})",
+                                )
                                 lastReconnectAttemptAtMs = now
                                 reconnectCount += 1
                                 broadcastStatus("reconnecting", "unhealthy_stream")
@@ -124,7 +155,8 @@ class StreamingService : LifecycleService() {
                             }
                         }
                     }
-                } catch (_: Throwable) {
+                } catch (t: Throwable) {
+                    AppLog.w("StreamingService", "monitor loop failed: ${t.message}", t)
                 }
                 Thread.sleep(2000)
             }
@@ -132,6 +164,99 @@ class StreamingService : LifecycleService() {
             it.isDaemon = true
             it.start()
         }
+    }
+
+    private val usbPermissionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != ACTION_USB_PERMISSION) return
+            val accessory: UsbAccessory? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY, UsbAccessory::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY)
+            }
+            val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+            if (granted && accessory != null) {
+                AppLog.i("StreamingService", "USB accessory permission granted ${accessorySummary(accessory)}")
+                openUsbAccessory(accessory, "permission_granted")
+            } else {
+                AppLog.w("StreamingService", "USB accessory permission denied")
+            }
+        }
+    }
+
+    private fun ensureUsbAccessoryReady(reason: String): Boolean {
+        val existing = usbAccessoryTransport
+        if (existing?.isConnected() == true) {
+            controller?.attachUsbAccessoryTransport(existing)
+            AppLog.i("StreamingService", "Reusing USB AOA accessory connection reason=$reason")
+            return true
+        }
+
+        val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
+        val accessory = usbManager.accessoryList?.firstOrNull()
+        if (accessory == null) {
+            AppLog.w("StreamingService", "No USB accessory present reason=$reason")
+            return false
+        }
+
+        if (usbManager.hasPermission(accessory)) {
+            AppLog.i("StreamingService", "USB accessory available reason=$reason ${accessorySummary(accessory)}")
+            return openUsbAccessory(accessory, reason)
+        }
+
+        pendingAccessory = accessory
+        AppLog.i("StreamingService", "Requesting USB accessory permission reason=$reason ${accessorySummary(accessory)}")
+        val pi = PendingIntent.getBroadcast(
+            this,
+            0,
+            Intent(ACTION_USB_PERMISSION),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+        usbManager.requestPermission(accessory, pi)
+        return false
+    }
+
+    private fun openUsbAccessory(accessory: UsbAccessory, reason: String): Boolean {
+        val existing = usbAccessoryTransport
+        if (existing?.isConnected() == true) {
+            controller?.attachUsbAccessoryTransport(existing)
+            AppLog.i("StreamingService", "AOA already open reason=$reason ${accessorySummary(accessory)}")
+            return true
+        }
+
+        releaseUsbAccessoryTransport("reopen_for_$reason")
+        val transport = UsbAccessoryTransport(this) { msg ->
+            AppLog.i("StreamingService", "AOA: $msg")
+        }
+        if (!transport.open(accessory)) {
+            AppLog.e("StreamingService", "Failed to open USB accessory reason=$reason ${accessorySummary(accessory)}")
+            return false
+        }
+
+        usbAccessoryTransport = transport
+        controller?.attachUsbAccessoryTransport(transport)
+        AppLog.i("StreamingService", "USB accessory opened reason=$reason ${accessorySummary(accessory)}")
+        return true
+    }
+
+    private fun releaseUsbAccessoryTransport(reason: String) {
+        controller?.attachUsbAccessoryTransport(null)
+        pendingAccessory = null
+        val transport = usbAccessoryTransport ?: return
+        usbAccessoryTransport = null
+        try {
+            transport.close()
+        } catch (_: Throwable) {
+        }
+        AppLog.i("StreamingService", "Released USB accessory transport reason=$reason")
+    }
+
+    private fun accessorySummary(accessory: UsbAccessory): String {
+        val manufacturer = accessory.manufacturer ?: "unknown"
+        val model = accessory.model ?: "unknown"
+        val version = accessory.version ?: "unknown"
+        return "manufacturer=$manufacturer model=$model version=$version"
     }
 
     private fun broadcastStatus(state: String, reason: String) {
@@ -177,6 +302,7 @@ class StreamingService : LifecycleService() {
     }
 
     companion object {
+        private const val ACTION_USB_PERMISSION = "com.acb.androidcam.USB_PERMISSION_SERVICE"
         const val ACTION_START = "com.acb.androidcam.action.START_STREAMING"
         const val ACTION_STOP = "com.acb.androidcam.action.STOP_STREAMING"
         const val ACTION_STATUS = "com.acb.androidcam.action.STREAMING_STATUS"

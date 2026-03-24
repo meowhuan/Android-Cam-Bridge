@@ -12,7 +12,7 @@ import android.hardware.usb.UsbAccessory
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
-import android.util.Log
+import android.view.TextureView
 import android.view.View
 import android.view.WindowManager
 import android.widget.ArrayAdapter
@@ -24,7 +24,6 @@ import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -73,6 +72,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLog.init(this)
         setContentView(R.layout.activity_main)
 
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -96,7 +96,7 @@ class MainActivity : AppCompatActivity() {
         debugOverlayView = findViewById(R.id.debugOverlay)
         debugLogScrollView = findViewById(R.id.debugLogScroll)
         debugLogTextView = findViewById(R.id.debugLogText)
-        val previewView = findViewById<PreviewView>(R.id.previewView)
+        val previewView = findViewById<TextureView>(R.id.previewView)
         controller = CameraController(this, this, previewView) { msg ->
             runOnUiThread {
                 if (debugModeEnabled) {
@@ -134,7 +134,6 @@ class MainActivity : AppCompatActivity() {
         transportSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, transportOptions)
         resolutionSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, resolutions)
         fpsSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, fpsOptions)
-        previewView.scaleType = PreviewView.ScaleType.FIT_CENTER
         resolutionSpinner.setSelection(1)
         val fpsIndex = fpsOptions.indexOfFirst { it.fps == selectedFps }.let { if (it < 0) 1 else it }
         fpsSpinner.setSelection(fpsIndex)
@@ -145,6 +144,9 @@ class MainActivity : AppCompatActivity() {
         updateOrientationButtonText(orientationButton)
         applyControlsVisibility(controlsPanel, toggleUiButton)
         applyDebugModeUi()
+        if (debugModeEnabled) {
+            appendDebugLogLine("file logs: ${AppLog.getLogDirPath()}")
+        }
 
         ensurePermissions()
 
@@ -158,6 +160,7 @@ class MainActivity : AppCompatActivity() {
         if (intent?.action == UsbManager.ACTION_USB_ACCESSORY_ATTACHED) {
             handleUsbAccessoryIntent(intent)
         }
+        probeExistingUsbAccessory("activity_create", requestPermissionIfNeeded = false)
 
         sleepProtectionCheckbox.setOnCheckedChangeListener { _, checked ->
             keepScreenOnWhileStreaming = checked
@@ -175,6 +178,7 @@ class MainActivity : AppCompatActivity() {
             applyDebugModeUi()
             if (checked) {
                 appendDebugLogLine("debug mode enabled")
+                appendDebugLogLine("file logs: ${AppLog.getLogDirPath()}")
             }
         }
         debugOverlayCloseButton?.setOnClickListener {
@@ -228,6 +232,14 @@ class MainActivity : AppCompatActivity() {
                 receiver
             }
 
+            if (mode == CameraController.TransportMode.USB_AOA) {
+                if (backgroundStreamingEnabled) {
+                    releaseUsbAccessoryTransport("handoff_to_service")
+                } else {
+                    probeExistingUsbAccessory("start_button")
+                }
+            }
+
             if (backgroundStreamingEnabled) {
                 controller.stop()
                 startBackgroundStreaming(
@@ -260,6 +272,7 @@ class MainActivity : AppCompatActivity() {
 
         stop.setOnClickListener {
             controller.stop()
+            releaseUsbAccessoryTransport("stop_button")
             stopBackgroundStreaming()
             isStreaming = false
             applyKeepScreenOnFlag()
@@ -276,7 +289,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        usbAccessoryTransport?.close()
+        releaseUsbAccessoryTransport("activity_destroy")
         try { unregisterReceiver(usbPermissionReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(aoaEntryReceiver) } catch (_: Exception) {}
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -415,9 +428,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                 if (granted && accessory != null) {
-                    openUsbAccessory(accessory)
+                    openUsbAccessory(accessory, "permission_granted")
                 } else {
-                    Log.w("MainActivity", "USB accessory permission denied")
+                    AppLog.w("MainActivity", "USB accessory permission denied")
                 }
             }
         }
@@ -429,7 +442,7 @@ class MainActivity : AppCompatActivity() {
     private val aoaEntryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action == ACTION_ENTER_AOA) {
-                Log.i("MainActivity", "Received ACTION_ENTER_AOA from ADB")
+                AppLog.i("MainActivity", "Received ACTION_ENTER_AOA from ADB")
                 val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
                 val accessories = usbManager.accessoryList
                 if (accessories != null && accessories.isNotEmpty()) {
@@ -437,7 +450,7 @@ class MainActivity : AppCompatActivity() {
                         putExtra(UsbManager.EXTRA_ACCESSORY, accessories[0])
                     })
                 } else {
-                    Log.w("MainActivity", "No USB accessory available for AOA entry")
+                    AppLog.w("MainActivity", "No USB accessory available for AOA entry")
                 }
             }
         }
@@ -451,19 +464,47 @@ class MainActivity : AppCompatActivity() {
             intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY)
         }
         if (accessory == null) return
+        handleUsbAccessory(accessory, "intent")
+    }
+
+    private fun probeExistingUsbAccessory(reason: String, requestPermissionIfNeeded: Boolean = true): Boolean {
         val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
+        val accessory = usbManager.accessoryList?.firstOrNull()
+        if (accessory == null) {
+            AppLog.d("MainActivity", "No USB accessory present reason=$reason")
+            return false
+        }
+        if (!requestPermissionIfNeeded && !usbManager.hasPermission(accessory)) {
+            AppLog.i("MainActivity", "USB accessory detected without permission reason=$reason ${accessorySummary(accessory)}")
+            return false
+        }
+        handleUsbAccessory(accessory, reason)
+        return true
+    }
+
+    private fun handleUsbAccessory(accessory: UsbAccessory, reason: String) {
+        val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
+        val summary = accessorySummary(accessory)
         if (usbManager.hasPermission(accessory)) {
-            openUsbAccessory(accessory)
+            AppLog.i("MainActivity", "USB accessory available reason=$reason $summary")
+            openUsbAccessory(accessory, reason)
         } else {
             pendingAccessory = accessory
+            AppLog.i("MainActivity", "Requesting USB accessory permission reason=$reason $summary")
             val pi = PendingIntent.getBroadcast(this, 0,
                 Intent(ACTION_USB_PERMISSION), PendingIntent.FLAG_IMMUTABLE)
             usbManager.requestPermission(accessory, pi)
         }
     }
 
-    private fun openUsbAccessory(accessory: UsbAccessory) {
-        usbAccessoryTransport?.close()
+    private fun openUsbAccessory(accessory: UsbAccessory, reason: String) {
+        val existing = usbAccessoryTransport
+        if (existing?.isConnected() == true) {
+            controller.attachUsbAccessoryTransport(existing)
+            AppLog.i("MainActivity", "Reusing USB AOA accessory connection reason=$reason ${accessorySummary(accessory)}")
+            return
+        }
+        releaseUsbAccessoryTransport("reopen_for_$reason")
         val transport = UsbAccessoryTransport(this) { msg ->
             runOnUiThread {
                 appendDebugLogLine(msg)
@@ -472,10 +513,28 @@ class MainActivity : AppCompatActivity() {
         if (transport.open(accessory)) {
             usbAccessoryTransport = transport
             controller.attachUsbAccessoryTransport(transport)
-            Log.i("MainActivity", "USB AOA accessory opened successfully")
+            AppLog.i("MainActivity", "USB AOA accessory opened successfully reason=$reason ${accessorySummary(accessory)}")
         } else {
-            Log.e("MainActivity", "Failed to open USB accessory")
+            AppLog.e("MainActivity", "Failed to open USB accessory reason=$reason ${accessorySummary(accessory)}")
         }
+    }
+
+    private fun releaseUsbAccessoryTransport(reason: String) {
+        controller.attachUsbAccessoryTransport(null)
+        val transport = usbAccessoryTransport ?: return
+        usbAccessoryTransport = null
+        try {
+            transport.close()
+        } catch (_: Throwable) {
+        }
+        AppLog.i("MainActivity", "Released USB AOA accessory transport reason=$reason")
+    }
+
+    private fun accessorySummary(accessory: UsbAccessory): String {
+        val manufacturer = accessory.manufacturer ?: "unknown"
+        val model = accessory.model ?: "unknown"
+        val version = accessory.version ?: "unknown"
+        return "manufacturer=$manufacturer model=$model version=$version"
     }
 
     private fun ensurePermissions() {
