@@ -4,7 +4,6 @@ import android.content.Context
 import android.util.Log
 import java.io.File
 import java.nio.charset.StandardCharsets
-import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
@@ -17,14 +16,14 @@ object AppLog {
     private val initialized = AtomicBoolean(false)
     private val uncaughtHandlerInstalled = AtomicBoolean(false)
     private val fileLock = Any()
+    private const val MaxLogFilesToKeep = 3
 
     @Volatile private var appContext: Context? = null
     @Volatile private var logDirPath: String = ""
-    @Volatile private var activeDate = ""
     @Volatile private var activeFile: File? = null
 
-    private val dayFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd")
     private val tsFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")
+    private val sessionFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS")
 
     fun init(context: Context) {
         val ctx = context.applicationContext
@@ -33,6 +32,10 @@ object AppLog {
         logDirPath = dir.absolutePath
 
         if (initialized.compareAndSet(false, true)) {
+            synchronized(fileLock) {
+                activeFile = createSessionLogFile(dir)
+            }
+            pruneOldLogs(dir, keepCount = MaxLogFilesToKeep)
             installUncaughtHandler()
             i("AppLog", "file logging initialized dir=$logDirPath")
         }
@@ -100,16 +103,16 @@ object AppLog {
     }
 
     private fun currentLogFile(context: Context): File {
-        val today = LocalDate.now().format(dayFormatter)
         synchronized(fileLock) {
             val cached = activeFile
-            if (cached != null && activeDate == today) {
+            if (cached != null) {
                 return cached
             }
+
             val dir = resolveLogDir(context)
-            val file = File(dir, "acb-$today.log")
-            activeDate = today
+            val file = createSessionLogFile(dir)
             activeFile = file
+            pruneOldLogs(dir, keepCount = MaxLogFilesToKeep)
             return file
         }
     }
@@ -121,5 +124,32 @@ object AppLog {
             dir.mkdirs()
         }
         return dir
+    }
+
+    private fun createSessionLogFile(dir: File): File {
+        val baseName = "acb-${LocalDateTime.now().format(sessionFormatter)}"
+        val primary = File(dir, "$baseName.log")
+        if (!primary.exists()) {
+            return primary
+        }
+
+        var suffix = 1
+        while (true) {
+            val candidate = File(dir, "$baseName-$suffix.log")
+            if (!candidate.exists()) {
+                return candidate
+            }
+            suffix++
+        }
+    }
+
+    private fun pruneOldLogs(dir: File, keepCount: Int) {
+        val files = dir.listFiles { file ->
+            file.isFile && file.name.startsWith("acb-") && file.name.endsWith(".log")
+        }?.sortedByDescending { it.lastModified() } ?: return
+
+        files.drop(keepCount).forEach { file ->
+            runCatching { file.delete() }
+        }
     }
 }
