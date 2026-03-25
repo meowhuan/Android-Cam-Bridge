@@ -33,6 +33,7 @@ android/local.properties
 *.apk
 *.aab
 .kotlin/
+android/.gradle-user/
 
 # .NET / WinUI
 **/bin/

@@ -16,6 +16,7 @@ using System.Text;
 using System.Text.Json;
 using System.Reflection;
 using Windows.Graphics;
+using Windows.System;
 using WinRT.Interop;
 
 namespace Acb.Gui;
@@ -27,10 +28,12 @@ public sealed partial class MainWindow : Window
         Session,
         Devices,
         VirtualCam,
-        Logs
+        Logs,
+        About
     }
 
     private readonly ReceiverApiClient _client = new();
+    private readonly ReleaseUpdateService _releaseUpdateService = new();
     private readonly DispatcherTimer _statsTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private readonly DispatcherTimer _usbNativeTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private readonly DispatcherTimer _usbAoaTimer = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -50,6 +53,13 @@ public sealed partial class MainWindow : Window
     private bool _uiInitialized;
     private bool _windowChromeInitialized;
     private LeftSection _activeSection = LeftSection.Session;
+    private AppPreferences _preferences = new();
+    private bool _updateCheckInProgress;
+    private bool _updateCheckQueued;
+    private bool _updateAvailable;
+    private DateTimeOffset? _lastUpdateCheckAt;
+    private string? _lastUpdateErrorMessage;
+    private ReleaseUpdateResult? _lastUpdateResult;
     private const string VirtualCamPipeName = "acb-virtualcam-control";
     private readonly List<LogEntryItem> _allLogEntries = new();
     private readonly ObservableCollection<LogEntryItem> _visibleLogEntries = new();
@@ -57,6 +67,10 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _preferences = AppPreferencesStore.Load(defaultParticipateInPreviewBuilds: IsPreviewBuildVersion(GetApplicationVersion()));
+        PreviewBuildsBox.IsChecked = _preferences.ParticipateInPreviewBuilds;
+        SuppressUpdateRemindersBox.IsChecked = _preferences.SuppressUpdateReminders;
+        RepositoryUrlBox.Text = ReleaseUpdateService.RepositoryUrl;
         TryApplyWindowBackdrop();
         Activated += OnWindowActivated;
         TryResizeWindow(1320, 840);
@@ -75,11 +89,13 @@ public sealed partial class MainWindow : Window
         ShowSection(LeftSection.Session);
         ApplyLanguage();
         UpdateBuildIdentity();
+        UpdateReleaseUpdateUi();
         if (!string.IsNullOrWhiteSpace(AppLogger.LogFilePath))
         {
             AppendOutput(AppLogger.LogFilePath!, "gui log");
         }
         AppLogger.Info("main window initialized");
+        _ = CheckForUpdatesAsync(false);
     }
 
     private void OnWindowActivated(object sender, WindowActivatedEventArgs args)
@@ -580,6 +596,57 @@ public sealed partial class MainWindow : Window
         ShowSection(LeftSection.Logs);
     }
 
+    private async void OnShowAboutSection(object sender, RoutedEventArgs e)
+    {
+        ShowSection(LeftSection.About);
+        if (_lastUpdateResult == null && !_updateCheckInProgress)
+        {
+            await CheckForUpdatesAsync(false);
+        }
+    }
+
+    private async void OnCheckForUpdates(object sender, RoutedEventArgs e)
+    {
+        await CheckForUpdatesAsync(true);
+    }
+
+    private async void OnPreviewParticipationChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_uiInitialized)
+        {
+            return;
+        }
+
+        _preferences = _preferences with { ParticipateInPreviewBuilds = PreviewBuildsBox.IsChecked ?? false };
+        SaveUpdatePreferences();
+        AppLogger.Info($"preview testing preference changed enabled={_preferences.ParticipateInPreviewBuilds}");
+        UpdateReleaseUpdateUi();
+        await CheckForUpdatesAsync(false);
+    }
+
+    private void OnSuppressUpdateRemindersChanged(object sender, RoutedEventArgs e)
+    {
+        if (!_uiInitialized)
+        {
+            return;
+        }
+
+        _preferences = _preferences with { SuppressUpdateReminders = SuppressUpdateRemindersBox.IsChecked ?? false };
+        SaveUpdatePreferences();
+        AppLogger.Info($"update reminders suppressed={_preferences.SuppressUpdateReminders}");
+        UpdateReleaseUpdateUi();
+    }
+
+    private async void OnOpenRepository(object sender, RoutedEventArgs e)
+    {
+        await OpenExternalUrlAsync(ReleaseUpdateService.RepositoryUrl);
+    }
+
+    private async void OnOpenReleasePage(object sender, RoutedEventArgs e)
+    {
+        await OpenExternalUrlAsync(GetReleasePageUrl());
+    }
+
     private async void OnVirtualCamTimerTick(object? sender, object e)
     {
         if (_virtualCamRefreshInProgress) return;
@@ -863,6 +930,10 @@ public sealed partial class MainWindow : Window
         {
             LogsSection.Visibility = section == LeftSection.Logs ? Visibility.Visible : Visibility.Collapsed;
         }
+        if (AboutSection != null)
+        {
+            AboutSection.Visibility = section == LeftSection.About ? Visibility.Visible : Visibility.Collapsed;
+        }
 
         UpdateSectionButtonStates();
         UpdateChromeSummary();
@@ -874,6 +945,7 @@ public sealed partial class MainWindow : Window
         UpdateSectionButtonVisual(DevicesSectionButton, _activeSection == LeftSection.Devices);
         UpdateSectionButtonVisual(VirtualCamSectionButton, _activeSection == LeftSection.VirtualCam);
         UpdateSectionButtonVisual(LogsSectionButton, _activeSection == LeftSection.Logs);
+        UpdateSectionButtonVisual(AboutSectionButton, _activeSection == LeftSection.About);
     }
 
     private void UpdateChromeSummary()
@@ -891,6 +963,7 @@ public sealed partial class MainWindow : Window
                 LeftSection.Devices => zh ? "设备与链路" : "Devices & Link",
                 LeftSection.VirtualCam => zh ? "虚拟摄像头" : "Virtual Camera",
                 LeftSection.Logs => zh ? "日志与诊断" : "Logs & Diagnostics",
+                LeftSection.About => zh ? "关于与更新" : "About & Updates",
                 _ => zh ? "会话控制" : "Session Control"
             };
         }
@@ -908,6 +981,9 @@ public sealed partial class MainWindow : Window
                 LeftSection.Logs => zh
                     ? "查看运行时日志、Receiver 返回和自动化输出。"
                     : "Review runtime logs, receiver responses, and automation output.",
+                LeftSection.About => zh
+                    ? "查看仓库地址、当前构建渠道，以及 GitHub Releases 更新状态。"
+                    : "Review repository links, build channel details, and GitHub release update status.",
                 _ => zh
                     ? "调整画质与传输参数，启动会话并跟踪实时状态。"
                     : "Adjust quality and transport, start sessions, and track live state."
@@ -1266,14 +1342,42 @@ public sealed partial class MainWindow : Window
         (LogSourceFilterBox.Items[3] as ComboBoxItem)!.Content = zh ? "设备" : "Devices";
         (LogSourceFilterBox.Items[4] as ComboBoxItem)!.Content = zh ? "虚拟摄像头" : "Virtual Camera";
         LogSearchBox.PlaceholderText = zh ? "筛选日志" : "Filter logs";
+        AboutPanelTitleText.Text = zh ? "关于 Android Cam Bridge" : "About Android Cam Bridge";
+        AboutPanelSubtitleText.Text = zh
+            ? "查看仓库地址、当前构建信息和发布渠道。"
+            : "Review repository, build identity, and release channel details.";
+        AboutCurrentVersionLabelText.Text = zh ? "当前版本" : "Current Version";
+        AboutBuildChannelLabelText.Text = zh ? "发布渠道" : "Channel";
+        RepositoryLabelText.Text = zh ? "仓库地址" : "Repository";
+        OpenRepositoryButton.Content = zh ? "打开仓库" : "Open Repository";
+        OpenReleasesPageButton.Content = zh ? "打开发布页" : "Open Releases";
+        ReleaseUpdatesTitleText.Text = zh ? "发行版更新" : "Release Updates";
+        ReleaseUpdatesSubtitleText.Text = zh
+            ? "从 GitHub Releases 检查新版本。提醒会保持轻量，不会打断当前操作。"
+            : "Check GitHub Releases for new builds with lightweight reminders that never interrupt current work.";
+        PreviewBuildsBox.Content = zh ? "参与预览版测试" : "Participate in preview testing";
+        SuppressUpdateRemindersBox.Content = zh ? "不再提示更新（不建议）" : "Do not remind again (Not recommended)";
+        SuppressUpdateRemindersHintText.Text = zh
+            ? "自动检查仍可继续运行，但轻量提醒和导航角标会保持隐藏；你仍然可以手动检查更新。"
+            : "Automatic checks can still run, but lightweight reminders and navigation badges stay hidden until you check manually.";
+        PreviewRiskTitleText.Text = zh ? "风险提示" : "Risk Notice";
+        PreviewRiskText.Text = zh
+            ? "预览版可能包含未完成功能、协议变化或兼容性回归。只有在你愿意协助测试时才建议开启。"
+            : "Preview builds may include unfinished changes, protocol shifts, or compatibility regressions. Enable them only if you are comfortable helping test.";
+        UpdateCurrentVersionLabelText.Text = zh ? "当前版本" : "Current";
+        UpdateLatestVersionLabelText.Text = zh ? "最新发布" : "Latest Release";
+        UpdateLastCheckedLabelText.Text = zh ? "上次检查" : "Last Checked";
+        UpdateInfoBarActionButton.Content = zh ? "打开发布页" : "Open Release";
         AutoRefreshButton.Content = _autoRefreshEnabled
             ? (zh ? "关闭自动刷新（5秒）" : "Disable Auto Refresh (5s)")
             : (zh ? "开启自动刷新（5秒）" : "Auto Refresh Stats (5s)");
+        UpdateAboutSectionButtonLabel();
         UpdateSectionButtonStates();
         UpdateUsbNativePanelVisibility();
         UpdateUsbAoaPanelVisibility();
         UpdateChromeSummary();
         UpdateBuildIdentity();
+        UpdateReleaseUpdateUi();
     }
 
     private void OnLanguageChanged(object sender, SelectionChangedEventArgs e)
@@ -1285,6 +1389,237 @@ public sealed partial class MainWindow : Window
     private static int ParseInt(string text, int fallback)
     {
         return int.TryParse(text, out var value) && value > 0 ? value : fallback;
+    }
+
+    private async Task CheckForUpdatesAsync(bool userInitiated)
+    {
+        if (_updateCheckInProgress)
+        {
+            _updateCheckQueued = true;
+            return;
+        }
+
+        _updateCheckInProgress = true;
+        _lastUpdateErrorMessage = null;
+        var checkedAt = DateTimeOffset.Now;
+        UpdateReleaseUpdateUi();
+
+        try
+        {
+            var result = await _releaseUpdateService.CheckForUpdatesAsync(
+                GetApplicationVersion(),
+                _preferences.ParticipateInPreviewBuilds);
+
+            _lastUpdateResult = result;
+            _updateAvailable = result.UpdateAvailable;
+            AppLogger.Info($"release update check completed includePreview={result.IncludePreview} available={result.UpdateAvailable} latest={result.LatestRelease.TagName}");
+        }
+        catch (Exception ex)
+        {
+            _lastUpdateErrorMessage = ex.Message;
+            AppLogger.Error("release update check failed", ex);
+            if (userInitiated)
+            {
+                AppendOutput(
+                    IsZh()
+                        ? $"更新检查失败：{ex.Message}"
+                        : $"update check failed: {ex.Message}",
+                    "app");
+            }
+        }
+        finally
+        {
+            _lastUpdateCheckAt = checkedAt;
+            _updateCheckInProgress = false;
+            UpdateReleaseUpdateUi();
+            if (_updateCheckQueued)
+            {
+                _updateCheckQueued = false;
+                _ = CheckForUpdatesAsync(false);
+            }
+        }
+    }
+
+    private void UpdateReleaseUpdateUi()
+    {
+        if (UpdateStatusText == null)
+        {
+            return;
+        }
+
+        var zh = IsZh();
+        var currentVersion = FormatVersionLabel(GetApplicationVersion());
+
+        AboutCurrentVersionValueText.Text = currentVersion;
+        AboutBuildChannelValueText.Text = GetBuildChannelLabel(zh);
+        UpdateCurrentVersionValueText.Text = currentVersion;
+
+        CheckUpdatesButton.Content = _updateCheckInProgress
+            ? (zh ? "检查中..." : "Checking...")
+            : (zh ? "检查更新" : "Check for Updates");
+        CheckUpdatesButton.IsEnabled = !_updateCheckInProgress;
+
+        UpdateLatestVersionValueText.Text = _lastUpdateResult?.LatestRelease is { } latestRelease
+            ? FormatVersionLabel(latestRelease.Version)
+            : (_updateCheckInProgress
+                ? (zh ? "检查中..." : "Checking...")
+                : (zh ? "尚未检查" : "Not checked"));
+
+        UpdateLastCheckedValueText.Text = _lastUpdateCheckAt.HasValue
+            ? _lastUpdateCheckAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+            : (zh ? "未检查" : "Never");
+
+        UpdateInfoBar.IsOpen = false;
+        UpdateInfoBar.Severity = InfoBarSeverity.Informational;
+        UpdateInfoBar.Title = string.Empty;
+        UpdateInfoBar.Message = string.Empty;
+
+        if (_lastUpdateResult is { UpdateAvailable: true } result && ShouldShowUpdateReminder())
+        {
+            var latestLabel = FormatVersionLabel(result.LatestRelease.Version);
+            UpdateInfoBar.IsOpen = true;
+            UpdateInfoBar.Title = zh ? "发现可用更新" : "Update Available";
+            UpdateInfoBar.Message = zh
+                ? $"{latestLabel} 已发布。提醒不会阻断当前使用，你可以在方便时前往发布页更新。"
+                : $"{latestLabel} is available. This reminder stays lightweight, so you can update whenever convenient.";
+        }
+
+        UpdateStatusText.Text = BuildUpdateStatusMessage(zh);
+        UpdateAboutSectionButtonLabel();
+    }
+
+    private string BuildUpdateStatusMessage(bool zh)
+    {
+        if (_updateCheckInProgress)
+        {
+            return zh
+                ? "正在检查 GitHub Releases，请稍候。"
+                : "Checking GitHub Releases now.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(_lastUpdateErrorMessage))
+        {
+            return zh
+                ? $"更新检查失败：{_lastUpdateErrorMessage}"
+                : $"Update check failed: {_lastUpdateErrorMessage}";
+        }
+
+        if (_lastUpdateResult is not { } result)
+        {
+            return zh
+                ? "应用会在后台检查 GitHub Releases，提示保持轻量，不影响当前使用。"
+                : "The app can check GitHub Releases in the background while keeping reminders lightweight and non-blocking.";
+        }
+
+        if (result.UpdateAvailable)
+        {
+            if (_preferences.SuppressUpdateReminders)
+            {
+                return zh
+                    ? $"发现新版本 {FormatVersionLabel(result.LatestRelease.Version)}，但你已关闭更新提醒。仍可随时手动检查或打开发布页。"
+                    : $"A newer build {FormatVersionLabel(result.LatestRelease.Version)} is available, but update reminders are currently suppressed. You can still check manually or open the release page anytime.";
+            }
+
+            return zh
+                ? $"发现新版本 {FormatVersionLabel(result.LatestRelease.Version)}。这是轻提醒，不会打断当前操作，可在方便时更新。"
+                : $"A newer build {FormatVersionLabel(result.LatestRelease.Version)} is available. This is a lightweight reminder, so you can update whenever convenient.";
+        }
+
+        if (result.IncludePreview)
+        {
+            return zh
+                ? "当前已是最新版本，检查范围包含预览版。"
+                : "You're up to date, including preview releases.";
+        }
+
+        if (result.CurrentBuildIsPreview)
+        {
+            return zh
+                ? "当前未发现更高的正式版。你正在使用预览版，如需继续接收 beta/rc，请开启“参与预览版测试”。"
+                : "No newer stable release was found. You're on a preview build, so enable preview testing if you want beta or rc updates.";
+        }
+
+        return zh
+            ? "当前已是最新正式版。"
+            : "You're on the latest stable release.";
+    }
+
+    private void UpdateAboutSectionButtonLabel()
+    {
+        if (AboutSectionButtonText == null)
+        {
+            return;
+        }
+
+        var zh = IsZh();
+        AboutSectionButtonText.Text = ShouldShowUpdateReminder()
+            ? (zh ? "关于（有更新）" : "About (Update)")
+            : (zh ? "关于" : "About");
+    }
+
+    private bool ShouldShowUpdateReminder()
+    {
+        return _updateAvailable && !_preferences.SuppressUpdateReminders;
+    }
+
+    private void SaveUpdatePreferences()
+    {
+        AppPreferencesStore.Save(_preferences);
+    }
+
+    private static bool IsPreviewBuildVersion(string version)
+    {
+        var normalized = version.ToLowerInvariant();
+        return normalized.Contains("-preview", StringComparison.Ordinal) ||
+               normalized.Contains("-alpha", StringComparison.Ordinal) ||
+               normalized.Contains("-beta", StringComparison.Ordinal) ||
+               normalized.Contains("-rc", StringComparison.Ordinal);
+    }
+
+    private static string FormatVersionLabel(string version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            return "n/a";
+        }
+
+        return version.StartsWith("v", StringComparison.OrdinalIgnoreCase)
+            ? version
+            : $"v{version}";
+    }
+
+    private string GetReleasePageUrl()
+    {
+        var latestReleaseUrl = _lastUpdateResult?.LatestRelease.HtmlUrl;
+        return string.IsNullOrWhiteSpace(latestReleaseUrl)
+            ? ReleaseUpdateService.ReleasesUrl
+            : latestReleaseUrl;
+    }
+
+    private async Task OpenExternalUrlAsync(string url)
+    {
+        try
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            {
+                return;
+            }
+
+            var launched = await Launcher.LaunchUriAsync(uri);
+            if (!launched)
+            {
+                AppendOutput(
+                    IsZh()
+                        ? $"无法打开链接：{url}"
+                        : $"unable to open link: {url}",
+                    "app");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error($"open external url failed url={url}", ex);
+            AppendError(ex);
+        }
     }
 
     private static (int width, int height) ParseResolution(string value)

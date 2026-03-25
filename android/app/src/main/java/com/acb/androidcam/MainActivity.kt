@@ -10,6 +10,7 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.hardware.usb.UsbAccessory
 import android.hardware.usb.UsbManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.TextureView
@@ -49,9 +50,18 @@ class MainActivity : AppCompatActivity() {
     private var isStreaming = false
     private var isActivityVisible = false
     private var suppressSelectionCallbacks = true
+    private var participateInPreviewUpdates = false
+    private var suppressUpdateReminders = false
+    private var appUpdateCheckInProgress = false
+    private var appUpdateCheckQueued = false
+    private var appUpdateAvailable = false
+    private var lastAppUpdateCheckAt: Date? = null
+    private var lastAppUpdateErrorMessage: String? = null
+    private var lastAppUpdateResult: AppReleaseUpdateResult? = null
 
     private var availableProfiles: List<SupportedCaptureProfile> = emptyList()
     private lateinit var modeOptions: List<CaptureModeOption>
+    private val appReleaseUpdateChecker = AppReleaseUpdateChecker()
 
     private var statusTextView: TextView? = null
     private var previewStateTextView: TextView? = null
@@ -73,8 +83,18 @@ class MainActivity : AppCompatActivity() {
     private var toggleUiButton: Button? = null
     private var idlePreviewView: PreviewView? = null
     private var streamPreviewView: TextureView? = null
+    private var appUpdateBannerTextView: TextView? = null
+    private var appUpdateCurrentVersionTextView: TextView? = null
+    private var appUpdateLatestVersionTextView: TextView? = null
+    private var appUpdateLastCheckedTextView: TextView? = null
+    private var appUpdateStatusTextView: TextView? = null
+    private var appUpdatePreviewCheckbox: CheckBox? = null
+    private var appUpdateSuppressRemindersCheckbox: CheckBox? = null
+    private var appUpdateCheckButton: Button? = null
+    private var appUpdateOpenReleasesButton: Button? = null
 
     private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.US)
+    private val updateTimeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
 
     private val streamingStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -126,6 +146,10 @@ class MainActivity : AppCompatActivity() {
             ?: prefs.getBoolean(KEY_CONTROLS_VISIBLE, true)
         debugModeEnabled = savedInstanceState?.getBoolean(KEY_DEBUG_MODE)
             ?: prefs.getBoolean(KEY_DEBUG_MODE, false)
+        participateInPreviewUpdates = savedInstanceState?.getBoolean(KEY_PARTICIPATE_IN_PREVIEW_UPDATES)
+            ?: prefs.getBoolean(KEY_PARTICIPATE_IN_PREVIEW_UPDATES, isPreviewBuildVersion(currentAppVersion()))
+        suppressUpdateReminders = savedInstanceState?.getBoolean(KEY_SUPPRESS_UPDATE_REMINDERS)
+            ?: prefs.getBoolean(KEY_SUPPRESS_UPDATE_REMINDERS, false)
 
         applyOrientationLock()
 
@@ -149,6 +173,15 @@ class MainActivity : AppCompatActivity() {
         debugModeCheckbox = findViewById(R.id.debugModeCheckbox)
         torchCheckbox = findViewById(R.id.torchCheckbox)
         toggleUiButton = findViewById(R.id.toggleUiButton)
+        appUpdateBannerTextView = findViewById(R.id.appUpdateBannerText)
+        appUpdateCurrentVersionTextView = findViewById(R.id.appUpdateCurrentVersionText)
+        appUpdateLatestVersionTextView = findViewById(R.id.appUpdateLatestVersionText)
+        appUpdateLastCheckedTextView = findViewById(R.id.appUpdateLastCheckedText)
+        appUpdateStatusTextView = findViewById(R.id.appUpdateStatusText)
+        appUpdatePreviewCheckbox = findViewById(R.id.appUpdatePreviewCheckbox)
+        appUpdateSuppressRemindersCheckbox = findViewById(R.id.appUpdateSuppressRemindersCheckbox)
+        appUpdateCheckButton = findViewById(R.id.appUpdateCheckButton)
+        appUpdateOpenReleasesButton = findViewById(R.id.appUpdateOpenReleasesButton)
 
         val previewView = requireNotNull(idlePreviewView)
         previewController = PreviewController(
@@ -193,6 +226,8 @@ class MainActivity : AppCompatActivity() {
         backgroundStreamingCheckbox?.isChecked = backgroundStreamingEnabled
         debugModeCheckbox?.isChecked = debugModeEnabled
         torchCheckbox?.isChecked = false
+        appUpdatePreviewCheckbox?.isChecked = participateInPreviewUpdates
+        appUpdateSuppressRemindersCheckbox?.isChecked = suppressUpdateReminders
 
         renderPreviewState(PreviewUiState.IDLE, getString(R.string.preview_hint_default))
         renderStreamState(StreamUiState.STOPPED, getString(R.string.stream_detail_default))
@@ -208,6 +243,7 @@ class MainActivity : AppCompatActivity() {
         applyControlsVisibility(controlsPanel, toggleUiButton ?: orientationButton)
         applyDebugModeUi()
         showPreviewSurfaces(idleVisible = true, streamVisible = false)
+        updateAppUpdateUi()
         if (debugModeEnabled) {
             appendDebugLogLine("file logs: ${AppLog.getLogDirPath()}")
         }
@@ -267,6 +303,17 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        appUpdatePreviewCheckbox?.setOnCheckedChangeListener { _, checked ->
+            participateInPreviewUpdates = checked
+            persistFlags()
+            updateAppUpdateUi()
+            checkAppUpdates(false)
+        }
+        appUpdateSuppressRemindersCheckbox?.setOnCheckedChangeListener { _, checked ->
+            suppressUpdateReminders = checked
+            persistFlags()
+            updateAppUpdateUi()
+        }
 
         debugOverlayCloseButton.setOnClickListener {
             debugModeEnabled = false
@@ -289,6 +336,12 @@ class MainActivity : AppCompatActivity() {
             controlsVisible = !controlsVisible
             persistFlags()
             applyControlsVisibility(controlsPanel, toggleUiButton ?: orientationButton)
+        }
+        appUpdateCheckButton?.setOnClickListener {
+            checkAppUpdates(true)
+        }
+        appUpdateOpenReleasesButton?.setOnClickListener {
+            openAppReleasePage()
         }
 
         val selectionListener = object : AdapterView.OnItemSelectedListener {
@@ -365,6 +418,8 @@ class MainActivity : AppCompatActivity() {
             bindPreviewIfPossible("stop_button")
             applyKeepScreenOnFlag()
         }
+
+        checkAppUpdates(false)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -420,6 +475,8 @@ class MainActivity : AppCompatActivity() {
         outState.putBoolean(KEY_BACKGROUND_STREAMING, backgroundStreamingEnabled)
         outState.putBoolean(KEY_CONTROLS_VISIBLE, controlsVisible)
         outState.putBoolean(KEY_DEBUG_MODE, debugModeEnabled)
+        outState.putBoolean(KEY_PARTICIPATE_IN_PREVIEW_UPDATES, participateInPreviewUpdates)
+        outState.putBoolean(KEY_SUPPRESS_UPDATE_REMINDERS, suppressUpdateReminders)
         super.onSaveInstanceState(outState)
     }
 
@@ -598,7 +655,178 @@ class MainActivity : AppCompatActivity() {
             .putBoolean(KEY_BACKGROUND_STREAMING, backgroundStreamingEnabled)
             .putBoolean(KEY_CONTROLS_VISIBLE, controlsVisible)
             .putBoolean(KEY_DEBUG_MODE, debugModeEnabled)
+            .putBoolean(KEY_PARTICIPATE_IN_PREVIEW_UPDATES, participateInPreviewUpdates)
+            .putBoolean(KEY_SUPPRESS_UPDATE_REMINDERS, suppressUpdateReminders)
             .apply()
+    }
+
+    private fun checkAppUpdates(userInitiated: Boolean) {
+        if (appUpdateCheckInProgress) {
+            appUpdateCheckQueued = true
+            return
+        }
+
+        appUpdateCheckInProgress = true
+        lastAppUpdateErrorMessage = null
+        val checkedAt = Date()
+        updateAppUpdateUi()
+
+        Thread {
+            var updateResult: AppReleaseUpdateResult? = null
+            var updateError: String? = null
+
+            try {
+                updateResult = appReleaseUpdateChecker.checkForUpdates(
+                    currentVersion = currentAppVersion(),
+                    includePreview = participateInPreviewUpdates,
+                )
+                AppLog.i(
+                    "MainActivity",
+                    "app update check completed includePreview=${updateResult.includePreview} available=${updateResult.updateAvailable} latest=${updateResult.latestRelease.tagName}",
+                )
+            } catch (ex: Exception) {
+                updateError = ex.message ?: ex.javaClass.simpleName
+                AppLog.e("MainActivity", "app update check failed", ex)
+            }
+
+            runOnUiThread {
+                lastAppUpdateCheckAt = checkedAt
+                appUpdateCheckInProgress = false
+
+                if (updateResult != null) {
+                    lastAppUpdateResult = updateResult
+                    appUpdateAvailable = updateResult.updateAvailable
+                    lastAppUpdateErrorMessage = null
+                    if (debugModeEnabled) {
+                        appendDebugLogLine(
+                            "app updates checked includePreview=${updateResult.includePreview} available=${updateResult.updateAvailable} latest=${updateResult.latestRelease.tagName}",
+                        )
+                    }
+                } else {
+                    lastAppUpdateErrorMessage = updateError
+                    if (userInitiated && debugModeEnabled && !updateError.isNullOrBlank()) {
+                        appendDebugLogLine("app update check failed: $updateError")
+                    }
+                }
+
+                updateAppUpdateUi()
+
+                if (appUpdateCheckQueued) {
+                    appUpdateCheckQueued = false
+                    checkAppUpdates(false)
+                }
+            }
+        }.start()
+    }
+
+    private fun updateAppUpdateUi() {
+        val currentVersion = formatVersionLabel(currentAppVersion())
+        val latestVersion = when {
+            lastAppUpdateResult != null -> formatVersionLabel(lastAppUpdateResult!!.latestRelease.version)
+            appUpdateCheckInProgress -> getString(R.string.app_update_checking)
+            else -> getString(R.string.app_update_not_checked)
+        }
+        val lastChecked = lastAppUpdateCheckAt?.let { updateTimeFmt.format(it) }
+            ?: getString(R.string.app_update_never_checked)
+
+        appUpdateCurrentVersionTextView?.text = getString(R.string.app_update_current_version, currentVersion)
+        appUpdateLatestVersionTextView?.text = getString(R.string.app_update_latest_version, latestVersion)
+        appUpdateLastCheckedTextView?.text = getString(R.string.app_update_last_checked, lastChecked)
+        appUpdateCheckButton?.text = if (appUpdateCheckInProgress) {
+            getString(R.string.app_update_checking)
+        } else {
+            getString(R.string.btn_check_updates)
+        }
+        appUpdateCheckButton?.isEnabled = !appUpdateCheckInProgress
+
+        val banner = appUpdateBannerTextView
+        if (shouldShowAppUpdateReminder() && lastAppUpdateResult != null) {
+            banner?.visibility = View.VISIBLE
+            banner?.text = getString(
+                R.string.app_update_banner_available,
+                formatVersionLabel(lastAppUpdateResult!!.latestRelease.version),
+            )
+        } else {
+            banner?.visibility = View.GONE
+        }
+
+        appUpdateStatusTextView?.text = buildAppUpdateStatusText()
+    }
+
+    private fun buildAppUpdateStatusText(): String {
+        if (appUpdateCheckInProgress) {
+            return getString(R.string.app_update_status_checking)
+        }
+
+        if (!lastAppUpdateErrorMessage.isNullOrBlank()) {
+            return getString(R.string.app_update_status_error, lastAppUpdateErrorMessage)
+        }
+
+        val result = lastAppUpdateResult ?: return getString(R.string.app_update_status_default)
+        if (result.updateAvailable) {
+            val version = formatVersionLabel(result.latestRelease.version)
+            return if (suppressUpdateReminders) {
+                getString(R.string.app_update_status_available_suppressed, version)
+            } else {
+                getString(R.string.app_update_status_available, version)
+            }
+        }
+
+        if (result.includePreview) {
+            return getString(R.string.app_update_status_latest_preview)
+        }
+
+        if (result.currentBuildIsPreview) {
+            return getString(R.string.app_update_status_preview_current)
+        }
+
+        return getString(R.string.app_update_status_latest_stable)
+    }
+
+    private fun shouldShowAppUpdateReminder(): Boolean {
+        return appUpdateAvailable && !suppressUpdateReminders
+    }
+
+    private fun currentAppVersion(): String {
+        val versionName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0)).versionName
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0).versionName
+        }
+
+        return versionName?.takeIf { it.isNotBlank() } ?: "0.0.0"
+    }
+
+    private fun openAppReleasePage() {
+        val url = getAppReleasePageUrl()
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        }.onFailure { ex ->
+            AppLog.e("MainActivity", "failed to open release page", ex)
+            lastAppUpdateErrorMessage = ex.message ?: ex.javaClass.simpleName
+            updateAppUpdateUi()
+        }
+    }
+
+    private fun getAppReleasePageUrl(): String {
+        return lastAppUpdateResult?.latestRelease?.htmlUrl?.takeIf { it.isNotBlank() }
+            ?: AppReleaseUpdateChecker.RELEASES_URL
+    }
+
+    private fun formatVersionLabel(version: String): String {
+        return if (version.startsWith("v", ignoreCase = true)) {
+            version
+        } else {
+            "v$version"
+        }
+    }
+
+    private fun isPreviewBuildVersion(version: String): Boolean {
+        return version.contains("-preview", ignoreCase = true) ||
+            version.contains("-alpha", ignoreCase = true) ||
+            version.contains("-beta", ignoreCase = true) ||
+            version.contains("-rc", ignoreCase = true)
     }
 
     private fun startBackgroundStreaming(
@@ -797,5 +1025,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_BACKGROUND_STREAMING = "background_streaming"
         private const val KEY_CONTROLS_VISIBLE = "controls_visible"
         private const val KEY_DEBUG_MODE = "debug_mode"
+        private const val KEY_PARTICIPATE_IN_PREVIEW_UPDATES = "participate_in_preview_updates"
+        private const val KEY_SUPPRESS_UPDATE_REMINDERS = "suppress_update_reminders"
     }
 }

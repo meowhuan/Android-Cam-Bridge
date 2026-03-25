@@ -121,6 +121,12 @@
                             <TextBlock x:Name="LogsSectionButtonText" Text="Logs" />
                         </StackPanel>
                     </Button>
+                    <Button x:Name="AboutSectionButton" Style="{StaticResource NavChipStyle}" Click="OnShowAboutSection">
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <FontIcon Glyph="&#xE946;" FontFamily="Segoe Fluent Icons" />
+                            <TextBlock x:Name="AboutSectionButtonText" Text="About" />
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
 
                 <Border Grid.Row="1"
@@ -540,6 +546,218 @@
                             </ListView>
                         </Border>
                     </Grid>
+                </Grid>
+
+                <Grid x:Name="AboutSection" Visibility="Collapsed">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Spacing="12">
+                            <Border Style="{StaticResource SectionCardStyle}">
+                                <StackPanel Spacing="14">
+                                    <StackPanel Spacing="4">
+                                        <TextBlock x:Name="AboutPanelTitleText" Text="About Android Cam Bridge" FontSize="18" FontWeight="SemiBold" />
+                                        <TextBlock x:Name="AboutPanelSubtitleText"
+                                                   Text="Repository, build identity, and release channel details."
+                                                   Foreground="{ThemeResource AppMutedForegroundBrush}"
+                                                   TextWrapping="WrapWholeWords" />
+                                    </StackPanel>
+
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <Border Grid.Column="0"
+                                                Background="{ThemeResource AppCardBackgroundBrush}"
+                                                BorderBrush="{ThemeResource AppCardBorderBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="14"
+                                                Padding="12">
+                                            <StackPanel Spacing="4">
+                                                <TextBlock x:Name="AboutCurrentVersionLabelText"
+                                                           Text="Current Version"
+                                                           Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                                <TextBlock x:Name="AboutCurrentVersionValueText"
+                                                           Text="v1.0.0"
+                                                           FontWeight="SemiBold"
+                                                           TextWrapping="WrapWholeWords" />
+                                            </StackPanel>
+                                        </Border>
+
+                                        <Border Grid.Column="1"
+                                                Background="{ThemeResource AppCardBackgroundBrush}"
+                                                BorderBrush="{ThemeResource AppCardBorderBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="14"
+                                                Padding="12">
+                                            <StackPanel Spacing="4">
+                                                <TextBlock x:Name="AboutBuildChannelLabelText"
+                                                           Text="Channel"
+                                                           Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                                <TextBlock x:Name="AboutBuildChannelValueText"
+                                                           Text="Preview"
+                                                           FontWeight="SemiBold"
+                                                           TextWrapping="WrapWholeWords" />
+                                            </StackPanel>
+                                        </Border>
+                                    </Grid>
+
+                                    <StackPanel Spacing="6">
+                                        <TextBlock x:Name="RepositoryLabelText"
+                                                   Text="Repository"
+                                                   Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <TextBox x:Name="RepositoryUrlBox"
+                                                     Grid.Column="0"
+                                                     IsReadOnly="True"
+                                                     Text="https://github.com/meowhuan/Android-Cam-Bridge" />
+                                            <Button x:Name="OpenRepositoryButton"
+                                                    Grid.Column="1"
+                                                    Content="Open Repository"
+                                                    Click="OnOpenRepository" />
+                                            <Button x:Name="OpenReleasesPageButton"
+                                                    Grid.Column="2"
+                                                    Content="Open Releases"
+                                                    Click="OnOpenReleasePage" />
+                                        </Grid>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource SectionCardStyle}">
+                                <StackPanel Spacing="12">
+                                    <StackPanel Spacing="4">
+                                        <TextBlock x:Name="ReleaseUpdatesTitleText" Text="Release Updates" FontSize="18" FontWeight="SemiBold" />
+                                        <TextBlock x:Name="ReleaseUpdatesSubtitleText"
+                                                   Text="Lightweight reminders from GitHub Releases that never interrupt current work."
+                                                   Foreground="{ThemeResource AppMutedForegroundBrush}"
+                                                   TextWrapping="WrapWholeWords" />
+                                    </StackPanel>
+
+                                    <InfoBar x:Name="UpdateInfoBar"
+                                             IsOpen="False"
+                                             IsClosable="False"
+                                             Severity="Informational">
+                                        <InfoBar.ActionButton>
+                                            <Button x:Name="UpdateInfoBarActionButton"
+                                                    Content="Open Release"
+                                                    Click="OnOpenReleasePage" />
+                                        </InfoBar.ActionButton>
+                                    </InfoBar>
+
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <CheckBox x:Name="PreviewBuildsBox"
+                                                  Grid.Column="0"
+                                                  Content="Participate in preview testing"
+                                                  Click="OnPreviewParticipationChanged" />
+                                        <Button x:Name="CheckUpdatesButton"
+                                                Grid.Column="1"
+                                                Content="Check for Updates"
+                                                Click="OnCheckForUpdates" />
+                                    </Grid>
+
+                                    <StackPanel Spacing="4">
+                                        <CheckBox x:Name="SuppressUpdateRemindersBox"
+                                                  Content="Do not remind again (Not recommended)"
+                                                  Click="OnSuppressUpdateRemindersChanged" />
+                                        <TextBlock x:Name="SuppressUpdateRemindersHintText"
+                                                   Text="Automatic checks can still run, but lightweight update reminders and badges will stay hidden until you check manually."
+                                                   Foreground="{ThemeResource AppMutedForegroundBrush}"
+                                                   TextWrapping="WrapWholeWords" />
+                                    </StackPanel>
+
+                                    <Border Background="{ThemeResource AppNavActiveBrush}"
+                                            BorderBrush="{ThemeResource AppCardBorderBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="14"
+                                            Padding="12">
+                                        <StackPanel Spacing="4">
+                                            <TextBlock x:Name="PreviewRiskTitleText" Text="Risk Notice" FontWeight="SemiBold" />
+                                            <TextBlock x:Name="PreviewRiskText"
+                                                       Text="Preview builds may include unfinished changes and compatibility regressions. Enable them only if you are willing to help test."
+                                                       Foreground="{ThemeResource AppMutedForegroundBrush}"
+                                                       TextWrapping="WrapWholeWords" />
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <Border Grid.Column="0"
+                                                Background="{ThemeResource AppCardBackgroundBrush}"
+                                                BorderBrush="{ThemeResource AppCardBorderBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="14"
+                                                Padding="12">
+                                            <StackPanel Spacing="4">
+                                                <TextBlock x:Name="UpdateCurrentVersionLabelText"
+                                                           Text="Current"
+                                                           Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                                <TextBlock x:Name="UpdateCurrentVersionValueText"
+                                                           Text="v1.0.0"
+                                                           FontWeight="SemiBold"
+                                                           TextWrapping="WrapWholeWords" />
+                                            </StackPanel>
+                                        </Border>
+
+                                        <Border Grid.Column="1"
+                                                Background="{ThemeResource AppCardBackgroundBrush}"
+                                                BorderBrush="{ThemeResource AppCardBorderBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="14"
+                                                Padding="12">
+                                            <StackPanel Spacing="4">
+                                                <TextBlock x:Name="UpdateLatestVersionLabelText"
+                                                           Text="Latest Release"
+                                                           Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                                <TextBlock x:Name="UpdateLatestVersionValueText"
+                                                           Text="Not checked"
+                                                           FontWeight="SemiBold"
+                                                           TextWrapping="WrapWholeWords" />
+                                            </StackPanel>
+                                        </Border>
+
+                                        <Border Grid.Column="2"
+                                                Background="{ThemeResource AppCardBackgroundBrush}"
+                                                BorderBrush="{ThemeResource AppCardBorderBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="14"
+                                                Padding="12">
+                                            <StackPanel Spacing="4">
+                                                <TextBlock x:Name="UpdateLastCheckedLabelText"
+                                                           Text="Last Checked"
+                                                           Foreground="{ThemeResource AppMutedForegroundBrush}" />
+                                                <TextBlock x:Name="UpdateLastCheckedValueText"
+                                                           Text="Never"
+                                                           FontWeight="SemiBold"
+                                                           TextWrapping="WrapWholeWords" />
+                                            </StackPanel>
+                                        </Border>
+                                    </Grid>
+
+                                    <TextBlock x:Name="UpdateStatusText"
+                                               Text="The app can check GitHub Releases in the background and keep this reminder lightweight."
+                                               Foreground="{ThemeResource AppMutedForegroundBrush}"
+                                               TextWrapping="WrapWholeWords" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
                 </Grid>
             </Grid>
         </Grid>

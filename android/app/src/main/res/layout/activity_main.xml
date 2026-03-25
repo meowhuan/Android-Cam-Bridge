@@ -274,6 +274,8 @@
                         android:text="@string/btn_stop_stream"
                         android:textColor="#FFFFFF" />
                 </LinearLayout>
+
+                <include layout="@layout/app_update_section" />
             </LinearLayout>
         </ScrollView>
     </LinearLayout>
